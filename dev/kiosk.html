@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LEARN 2EARN · dev kiosk (live test QR)</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<style>
+  :root{--navy:#101b35;--purple:#6758df}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 50% 0%,#1c2b4d,#0b1424 60%);color:#fff;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px}
+  .card{width:min(520px,100%);background:#0f1a30;border:1px solid #26365a;border-radius:18px;padding:26px;text-align:center;box-shadow:0 30px 80px #0006}
+  .tag{font-size:10px;letter-spacing:2px;color:#8fa0c0;font-weight:800}
+  h1{font-size:20px;margin:8px 0 2px}
+  .sub{color:#9fb0cf;font-size:12px;margin:0 0 18px}
+  .qr{background:#fff;border-radius:14px;padding:16px;display:inline-block;line-height:0}
+  canvas{width:260px;height:260px;image-rendering:pixelated}
+  .meta{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:18px;font-size:11px;color:#9fb0cf}
+  .meta span{background:#16243d;border:1px solid #27395c;border-radius:20px;padding:6px 12px}
+  .meta b{color:#fff;font-weight:700}
+  code{display:block;margin-top:16px;font-size:10px;color:#7d8dab;word-break:break-all;background:#0b1526;border:1px solid #1d2c48;border-radius:8px;padding:10px;text-align:left;user-select:all}
+  .foot{margin-top:16px;font-size:10px;color:#61718f;line-height:1.6}
+  .err{color:#ff9a9a;font-size:12px}
+</style>
+</head>
+<body>
+<div class="card">
+  <img src="../assets/learn2earn-logo.svg" alt="Learn2Earn" height="40" style="margin-bottom:10px">
+  <div class="tag">Learn2Earn · DEV ONLY · TEST KIOSK</div>
+  <h1 id="sessionName">Loading session…</h1>
+  <p class="sub">Point the student portal's camera at this code</p>
+  <div class="qr"><canvas id="qr" width="260" height="260"></canvas></div>
+  <div class="meta">
+    <span>Server time (WAT) <b id="serverTime">—</b></span>
+    <span>Cutoff <b id="cutoff">—</b></span>
+    <span>New code in <b id="countdown">—</b>s</span>
+  </div>
+  <code id="payload">—</code>
+  <p class="foot">Codes are signed by server.py and expire after 2 minutes.
+    This page is not part of the student portal and must never be deployed.</p>
+  <p class="err" id="error"></p>
+</div>
+<script>
+  const canvas = document.getElementById("qr");
+  let secondsLeft = 0;
+
+  async function refresh() {
+    try {
+      const response = await fetch("/api/v1/dev/qr", {cache: "no-store"});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not issue a QR code");
+      document.getElementById("sessionName").textContent = data.session_name;
+      document.getElementById("serverTime").textContent = data.server_time_wat.slice(11);
+      document.getElementById("cutoff").textContent = data.cutoff_wat;
+      document.getElementById("payload").textContent = data.qr_payload;
+      document.getElementById("error").textContent = "";
+      if (window.QRCode) {
+        await QRCode.toCanvas(canvas, data.qr_payload, {margin: 1, width: 260, errorCorrectionLevel: "M"});
+      } else {
+        document.getElementById("error").textContent = "QR library did not load (needs internet). Copy the payload below instead.";
+      }
+      secondsLeft = 30;
+    } catch (error) {
+      document.getElementById("error").textContent = error.message;
+    }
+  }
+
+  refresh();
+  setInterval(() => {
+    secondsLeft -= 1;
+    document.getElementById("countdown").textContent = Math.max(0, secondsLeft);
+    if (secondsLeft <= 0) refresh();
+  }, 1000);
+</script>
+</body>
+</html>
