@@ -1,12 +1,23 @@
 # Engineer A ↔ Engineer B API Integration Contract
 
-This frontend is intentionally independent of Engineer B's implementation. The default API base URL is configured at the top of `app.js`:
+> **Status note (18 November 2026).** This contract describes the session-based API that is
+> implemented today. The project supervisor has approved a change to **one attendance record
+> per student per calendar day**, with statuses Present / Late / Absent, which is **not yet
+> implemented** in `server.py` or this contract. The open question is which single daily cutoff
+> defines Late; until that is agreed, the session cutoffs below remain in force. See section 7
+> of `README.md` for the required changes.
+
+This frontend is intentionally independent of Engineer B's implementation. The API base URL is configured at the top of `app.js` and is derived from the page's own origin, so the portal calls whichever host served it:
 
 ```js
-API_BASE_URL: "http://localhost:8000/api/v1"
+API_BASE_URL: (() => {
+  const { protocol, origin } = window.location;
+  if (protocol === "http:" || protocol === "https:") return `${origin}/api/v1`;
+  return "http://localhost:8000/api/v1";   // opened from file://
+})(),
 ```
 
-Change this value to the backend's actual URL. The backend must enable CORS for the frontend origin.
+Override it only when the frontend must talk to a different host, for example Engineer B's server during integration. No trailing slash. The backend must enable CORS for the frontend origin.
 
 ## Required endpoints
 
@@ -156,7 +167,7 @@ Engineer B (backend / system owner):
 - Derives student identity from the authenticated principal, never from a student ID supplied by the browser.
 - Signs QR payloads and verifies signature, expiry, session state and eligibility.
 - Uses server time in the configured institutional timezone/rules to calculate `on_time` or `late`.
-- Enforces duplicate attendance with a database uniqueness constraint (for example, unique `(student_id, session_id)`) and a transaction-safe insert.
+- Enforces duplicate attendance with a database uniqueness constraint and a transaction-safe insert. Today the agreed key is unique `(student_id, session_id)`; under the approved daily-attendance policy it becomes unique `(student_id, attendance_date)`.
 - Returns attendance records only for the authenticated student.
 - Applies rate limits, input validation, CORS allow-listing and audit logging.
 
@@ -169,3 +180,4 @@ Engineer B (backend / system owner):
 - [ ] Confirm token expiry and refresh/logout strategy. For production, prefer secure, HttpOnly, SameSite cookies for refresh sessions; avoid long-lived tokens in localStorage.
 - [ ] Serve the frontend over HTTPS so mobile browsers can access the camera.
 - [ ] Test duplicate check-in using two simultaneous requests; only one attendance row may be created.
+- [ ] Confirm the single daily cutoff for the approved one-record-per-day policy, then agree the status vocabulary (`present` / `late` / `absent`) and the absence-marking process before either side changes code.
