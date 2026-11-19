@@ -6,6 +6,10 @@
   <meta name="theme-color" content="#052c6b">
   <title>LEARN 2EARN · Student Attendance Portal</title>
   <meta name="description" content="LEARN 2EARN student portal: sign in, scan the session QR code and review your monthly attendance history.">
+  <!-- Optional API override. Leave empty to use the same origin as the page (Django serves
+       the portal at /student/ and the API at /api/v1/ on the same host). Set a full URL to
+       point this build at another backend, e.g. http://127.0.0.1:8000/api/v1 -->
+  <meta name="learn2earn-api-base" content="">
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -35,7 +39,7 @@
         <button class="nav-item" data-view="history"><span>◷</span> Attendance history</button>
       </nav>
       <div class="sidebar-bottom">
-        <div class="help-card"><span class="help-icon">?</span><strong>Need help?</strong><p>Contact your attendance administrator if you have trouble signing in or scanning.</p></div>
+        <div class="help-card"><span class="help-icon">?</span><strong>Need help?</strong><p>Contact your mentor or attendance administrator if you cannot sign in or scan.</p></div>
         <button class="nav-item logout-link" id="logoutBtn"><span>↪</span> Sign out</button>
       </div>
     </aside>
@@ -44,7 +48,7 @@
       <header class="topbar">
         <button class="mobile-menu" id="menuBtn" aria-label="Open menu">☰</button>
         <div><span class="eyebrow">STUDENT WORKSPACE</span><h1 id="pageTitle">Dashboard</h1></div>
-        <div class="top-user"><span class="avatar" id="topAvatar">S</span><span><strong id="topName">Student</strong><small id="topUsername">@username</small></span></div>
+        <div class="top-user"><span class="avatar" id="topAvatar">S</span><span><strong id="topName">Student</strong><small id="topUsername">@username</small><small id="topCampus" class="top-campus"></small></span></div>
       </header>
 
       <section class="view active" id="dashboardView">
@@ -53,32 +57,37 @@
           <article class="stat-card"><span class="stat-icon purple">◷</span><span class="stat-label">Sessions attended</span><strong id="statAttended">—</strong><small>This month</small></article>
           <article class="stat-card"><span class="stat-icon green">✓</span><span class="stat-label">On-time attendance</span><strong id="statOnTime">—</strong><small>Recorded on time</small></article>
           <article class="stat-card"><span class="stat-icon amber">⌁</span><span class="stat-label">Late attendance</span><strong id="statLate">—</strong><small>Recorded as late</small></article>
-          <article class="stat-card"><span class="stat-icon blue">%</span><span class="stat-label">Attendance rate</span><strong id="statRate">—</strong><small>Based on available sessions</small></article>
+          <article class="stat-card"><span class="stat-icon blue">◔</span><span class="stat-label">Last check-in</span><strong id="statLast">—</strong><small id="statLastMeta">No scan recorded yet</small></article>
         </div>
         <div class="content-grid">
           <article class="panel">
             <div class="panel-heading"><div><h3>Recent attendance</h3><p class="muted">Your latest recorded sessions</p></div><button class="text-btn" data-go="history">View all →</button></div>
-            <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>DATE</th><th>TIME (WAT)</th><th>STATUS</th></tr></thead><tbody id="recentRows"><tr><td colspan="4" class="empty-cell">No attendance records yet.</td></tr></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>DATE</th><th>TIME (WAT)</th><th>STATUS</th></tr></thead><tbody id="recentRows"><tr><td colspan="4" class="empty-cell">Loading your attendance…</td></tr></tbody></table></div>
           </article>
-          <article class="panel profile-panel"><div class="panel-heading"><div><h3>My profile</h3><p class="muted">Your registered details</p></div><span class="profile-symbol">♙</span></div><div class="profile-detail"><small>FULL NAME</small><strong id="profileName">—</strong></div><div class="profile-detail"><small>ATTENDANCE USERNAME</small><strong id="profileUsername">—</strong></div><div class="profile-detail"><small>ACCOUNT STATUS</small><strong><span class="status-dot"></span> Active</strong></div><div class="profile-note">Your attendance username identifies your records. Keep your login details private.</div></article>
+          <article class="panel profile-panel"><div class="panel-heading"><div><h3>My profile</h3><p class="muted">Your enrolled details</p></div><span class="profile-symbol">♙</span></div><div class="profile-detail"><small>FULL NAME</small><strong id="profileName">—</strong></div><div class="profile-detail"><small>ATTENDANCE USERNAME</small><strong id="profileUsername">—</strong></div><div class="profile-detail"><small>CAMPUS</small><strong id="profileCampus">—</strong></div><div class="profile-detail"><small>ACCOUNT STATUS</small><strong><span class="status-dot"></span> Active</strong></div><div class="profile-note">Your account is created and managed by your mentor. Your attendance username identifies your records, so keep your login details private.</div></article>
         </div>
       </section>
 
       <section class="view" id="scannerView">
-        <div class="section-intro"><p class="eyebrow">CHECK IN TO A SESSION</p><h2>Scan attendance QR</h2><p class="muted">Allow camera access, then point your phone at the QR code displayed by your mentor.</p></div>
+        <div class="section-intro"><p class="eyebrow">CHECK IN TO A SESSION</p><h2>Scan attendance QR</h2><p class="muted">Allow camera and location access, then point your phone at the QR code displayed by your mentor.</p></div>
         <div class="scanner-layout">
-          <article class="panel scanner-panel"><div class="scanner-heading"><span class="camera-icon">▣</span><div><h3>QR code scanner</h3><p class="muted">Keep the QR code inside the frame</p></div></div><div id="reader"><div class="scanner-placeholder"><span>▦</span><strong>Your camera preview will appear here</strong><small>Use a secure connection (HTTPS) and allow camera access.</small></div></div><div class="scanner-actions"><button class="primary-btn" id="startScanBtn">Start camera</button><button class="secondary-btn" id="stopScanBtn" disabled>Stop camera</button></div><p class="scanner-hint">Camera access works on HTTPS or localhost. You can also use a device with a rear camera.</p></article>
-          <article class="panel instruction-panel"><h3>How to check in</h3><ol><li><span>1</span><div><strong>Ask your mentor to display the QR</strong><p>Only scan the QR code for your current attendance session.</p></div></li><li><span>2</span><div><strong>Start your camera</strong><p>Allow camera access when your browser asks for permission.</p></div></li><li><span>3</span><div><strong>Scan and wait for confirmation</strong><p>Keep the QR code steady until your attendance is verified.</p></div></li></ol><div class="security-note">🔒 Your attendance is only recorded after the server verifies the session and your student account.</div></article>
+          <article class="panel scanner-panel"><div class="scanner-heading"><span class="camera-icon">▣</span><div><h3>QR code scanner</h3><p class="muted">Keep the QR code inside the frame</p></div></div><div id="reader"><div class="scanner-placeholder"><span>▦</span><strong>Your camera preview will appear here</strong><small>Use a secure connection (HTTPS) and allow camera access.</small></div></div><div class="scanner-actions"><button class="primary-btn" id="startScanBtn">Start camera</button><button class="secondary-btn" id="stopScanBtn" disabled>Stop camera</button></div><p class="scanner-hint">Camera and location access work on HTTPS or localhost. Your location is sent with the scan so the server can confirm you are on campus.</p></article>
+          <article class="panel instruction-panel"><h3>How to check in</h3><ol><li><span>1</span><div><strong>Ask your mentor to display the QR</strong><p>Session codes are short-lived, so scan the code that is on screen now.</p></div></li><li><span>2</span><div><strong>Allow camera and location</strong><p>Your browser will ask for both. The scan cannot be recorded without them.</p></div></li><li><span>3</span><div><strong>Scan and wait for confirmation</strong><p>Keep the QR code steady until the server confirms your attendance.</p></div></li></ol><div class="security-note">🔒 Your attendance is only recorded after the server verifies the session, the QR code and your campus location.</div></article>
         </div>
-        <div class="notice hidden" id="scanNotice" role="status"></div>
+        <div class="scan-state hidden" id="scanState" role="status">
+          <span class="scan-spinner" aria-hidden="true"></span>
+          <div><strong id="scanStateTitle">Verifying scan…</strong><small id="scanStateText">Checking your QR code and location with the attendance server.</small></div>
+        </div>
+        <div class="notice hidden" id="scanNotice" role="alert"></div>
+        <div class="scan-retry hidden" id="scanRetry"><button class="primary-btn" id="retryScanBtn">Try scanning again</button><button class="secondary-btn" id="retryCameraBtn">Restart camera</button></div>
       </section>
 
       <section class="view" id="historyView">
         <div class="section-intro"><p class="eyebrow">YOUR RECORD</p><h2>Attendance history</h2><p class="muted">Review your attendance records by month.</p></div>
         <article class="panel">
           <div class="history-toolbar"><div><h3>Monthly records</h3><p class="muted">Times are displayed in West Africa Time (WAT).</p></div><input type="month" id="monthFilter" aria-label="Filter attendance by month"></div>
-          <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>DATE</th><th>TIME (WAT)</th><th>STATUS</th></tr></thead><tbody id="historyRows"><tr><td colspan="4" class="empty-cell">No attendance records yet.</td></tr></tbody></table></div>
-          <div class="table-foot" id="historyCount">0 records</div>
+          <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>DATE</th><th>TIME (WAT)</th><th>STATUS</th></tr></thead><tbody id="historyRows"><tr><td colspan="4" class="empty-cell">Loading your attendance…</td></tr></tbody></table></div>
+          <div class="table-foot" id="historyCount">—</div>
         </article>
       </section>
     </main>
@@ -89,17 +98,43 @@
       <div class="auth-card">
         <div class="auth-brand"><img class="brand-logo" src="assets/learn2earn-logo.svg" alt="Learn2Earn"></div>
         <p class="eyebrow">STUDENT PORTAL</p>
-        <div class="auth-tabs"><button class="auth-tab active" data-auth="login">Sign in</button><button class="auth-tab" data-auth="register">Create account</button></div>
-        <div id="loginForm"><h2>Sign in to your account</h2><p class="muted">Enter your attendance username and password.</p><form id="loginFormEl"><label for="loginUsername">Attendance username</label><input id="loginUsername" name="username" autocomplete="username" placeholder="e.g. myles_odeh" required><label for="loginPassword">Password</label><input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required><button class="primary-btn full-btn" type="submit">Sign in <span>&rarr;</span></button></form><p class="auth-switch">New student? <button data-auth="register">Create an account</button></p></div>
-        <div id="registerForm" class="hidden"><h2>Create your student account</h2><p class="muted">Use the details provided or approved by your institution.</p><form id="registerFormEl"><label for="fullName">Full name</label><input id="fullName" name="full_name" autocomplete="name" placeholder="Enter your full name" required minlength="2"><label for="registerUsername">Attendance username</label><input id="registerUsername" name="username" autocomplete="username" placeholder="e.g. myles_odeh" required minlength="3" maxlength="30"><small class="field-hint">Lowercase letters and numbers; no spaces. You can also use _ or -.</small><label for="registerPassword">Password</label><input id="registerPassword" name="password" type="password" autocomplete="new-password" placeholder="At least 8 characters" required minlength="8"><label for="confirmPassword">Confirm password</label><input id="confirmPassword" name="confirm_password" type="password" autocomplete="new-password" placeholder="Enter password again" required minlength="8"><button class="primary-btn full-btn" type="submit">Create account <span>&rarr;</span></button></form><p class="auth-switch">Already registered? <button data-auth="login">Sign in</button></p></div>
+        <div id="loginForm">
+          <h2>Sign in to your account</h2>
+          <p class="muted">Enter the attendance username and password your mentor gave you.</p>
+          <form id="loginFormEl">
+            <label for="loginUsername">Attendance username</label>
+            <input id="loginUsername" name="username" autocomplete="username" placeholder="e.g. myles_odeh" required>
+            <label for="loginPassword">Password</label>
+            <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+            <button class="primary-btn full-btn" type="submit">Sign in <span>&rarr;</span></button>
+          </form>
+          <div class="enroll-note" id="enrollNote"><strong>Need an account?</strong><p>Your account must be created by a mentor or administrator. Please contact your mentor to obtain your login details.</p></div>
+          <p class="session-note">For your security this session ends after 12 hours, or as soon as you sign out.</p>
+        </div>
         <div class="auth-alert hidden" id="authAlert" role="alert"></div>
-        <div class="demo-note" id="connectionNote">Connecting to attendance service…</div>
+        <div class="demo-note" id="connectionNote">Connecting to the attendance service…</div>
       </div>
       <div class="auth-bottom">© <span id="year"></span> Learn2Earn · Student Portal</div>
     </div>
   </div>
 
-  <div class="modal-backdrop hidden" id="confirmationModal" role="dialog" aria-modal="true" aria-labelledby="confirmationTitle"><div class="confirmation-card" role="document" tabindex="-1"><div class="success-mark">✓</div><p class="eyebrow">ATTENDANCE VERIFIED</p><h2 id="confirmationTitle">You're checked in!</h2><p class="muted" id="confirmationSubtitle">Your attendance has been recorded successfully.</p><div class="confirmation-details"><div><small>FULL NAME</small><strong id="confirmName">—</strong></div><div><small>USERNAME</small><strong id="confirmUsername">—</strong></div><div><small>SESSION</small><strong id="confirmSession">—</strong></div><div><small>DATE</small><strong id="confirmDate">—</strong></div><div><small>TIME (WAT)</small><strong id="confirmTime">—</strong></div></div><div class="confirmation-status" id="confirmStatus">ON TIME</div><button class="primary-btn full-btn" id="closeConfirmation">Done</button></div></div>
+  <div class="modal-backdrop hidden" id="confirmationModal" role="dialog" aria-modal="true" aria-labelledby="confirmationTitle">
+    <div class="confirmation-card" role="document" tabindex="-1">
+      <div class="success-mark" id="confirmationMark">✓</div>
+      <p class="eyebrow" id="confirmationEyebrow">ATTENDANCE VERIFIED</p>
+      <h2 id="confirmationTitle">You're checked in!</h2>
+      <p class="muted" id="confirmationSubtitle">Your attendance has been recorded successfully.</p>
+      <div class="confirmation-details">
+        <div><small>FULL NAME</small><strong id="confirmName">—</strong></div>
+        <div><small>USERNAME</small><strong id="confirmUsername">—</strong></div>
+        <div><small>SESSION</small><strong id="confirmSession">—</strong></div>
+        <div><small>DATE</small><strong id="confirmDate">—</strong></div>
+        <div><small>TIME (WAT)</small><strong id="confirmTime">—</strong></div>
+      </div>
+      <div class="confirmation-status" id="confirmStatus" data-status="">ON TIME</div>
+      <button class="primary-btn full-btn" id="closeConfirmation">Done</button>
+    </div>
+  </div>
   <div class="toast" id="toast" role="status"></div>
 </body>
 </html>

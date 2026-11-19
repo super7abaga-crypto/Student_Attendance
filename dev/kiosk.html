@@ -1,3 +1,35 @@
+  const canvas = document.getElementById("qr");
+  let secondsLeft = 0;
+
+  async function refresh() {
+    try {
+      const response = await fetch("/api/v1/dev/qr", {cache: "no-store"});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not issue a QR code");
+      document.getElementById("sessionName").textContent = data.session_name;
+      document.getElementById("serverTime").textContent = data.server_time_wat;
+      document.getElementById("cutoff").textContent = data.cutoff_wat;
+      document.getElementById("payload").textContent = data.payload;
+      document.getElementById("error").textContent = "";
+      if (window.QRCode) {
+        await QRCode.toCanvas(canvas, data.payload, {margin: 1, width: 260, errorCorrectionLevel: "M"});
+      } else {
+        document.getElementById("error").textContent = "QR library did not load (needs internet). Copy the payload below instead.";
+      }
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      secondsLeft = Math.max(0, Number(data.expires_at || 0) - nowSeconds);
+      document.getElementById("countdown").textContent = secondsLeft;
+    } catch (error) {
+      document.getElementById("error").textContent = error.message;
+    }
+  }
+
+  refresh();
+  setInterval(() => {
+    secondsLeft -= 1;
+    document.getElementById("countdown").textContent = Math.max(0, secondsLeft);
+    if (secondsLeft <= 0) refresh();
+  }, 1000);
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -33,10 +65,10 @@
   <div class="meta">
     <span>Server time (WAT) <b id="serverTime">—</b></span>
     <span>Cutoff <b id="cutoff">—</b></span>
-    <span>New code in <b id="countdown">—</b>s</span>
+    <span>Code expires in <b id="countdown">—</b>s</span>
   </div>
   <code id="payload">—</code>
-  <p class="foot">Codes are signed by server.py and expire after 2 minutes.
+  <p class="foot">Mock QR codes are signed by server.py and expire after 30 seconds, matching the contract.
     This page is not part of the student portal and must never be deployed.</p>
   <p class="err" id="error"></p>
 </div>
