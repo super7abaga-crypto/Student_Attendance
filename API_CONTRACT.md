@@ -174,7 +174,7 @@ Engineer B (backend / system owner):
 ## Integration checklist for Engineer B
 
 - [ ] Confirm API base URL and update `CONFIG.API_BASE_URL` in `app.js`.
-- [ ] Implement the four endpoints and response shapes above, or agree on a mapping before changing the frontend.
+- [ ] Implement the endpoints and response shapes documented above, or agree on a mapping before changing the frontend.
 - [ ] Configure CORS for the deployed frontend origin.
 - [ ] Confirm whether registration is open or requires an invitation/student code. If approval is required, add the agreed field and validation to the registration contract.
 - [ ] Confirm token expiry and refresh/logout strategy. For production, prefer secure, HttpOnly, SameSite cookies for refresh sessions; avoid long-lived tokens in localStorage.
