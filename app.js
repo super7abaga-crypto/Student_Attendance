@@ -1,423 +1,60 @@
-/*
- * Engineer A - Student Portal
- * Configure API_BASE_URL before connecting to Engineer B's backend.
- * The frontend never decides attendance validity or On Time/Late status.
- */
-const CONFIG = {
-  // Same origin as the page, so phones/tablets on the LAN hit the PC that served it.
-  // Opened from file:// there is no origin to borrow, so fall back to the dev server.
-  API_BASE_URL: (() => {
-    const { protocol, origin } = window.location;
-    if (protocol === "http:" || protocol === "https:") return `${origin}/api/v1`;
-    return "http://localhost:8000/api/v1";
-  })(),
-  // Keep false for integration/testing. Do not use demo mode for real attendance.
-  DEMO_MODE: false,
-  // Keep false for production: an access token in browser storage can be read by XSS.
-  // Set true only for local demos so a page refresh does not sign you out.
-  PERSIST_SESSION: false,
-  SESSION_STORAGE_KEY: "attendly.session",
-  // html5-qrcode uses the device browser camera. HTTPS is required outside localhost.
-};
-
-const state = {
-  token: null,
-  student: null,
-  records: [],            // dashboard month
-  historyRecords: [],     // month picked in the history filter
-  totalSessions: null,
-  scanner: null,
-  scannerRunning: false,
-  currentView: "dashboard",
-  scanLocked: false,
-  busy: false,
-};
-
-const $ = (id) => document.getElementById(id);
-const apiUrl = (path) => `${CONFIG.API_BASE_URL}${path}`;
-
-const WAT_TIMEZONE = "Africa/Lagos";
-
-function normalizeUsername(value) {
-  return String(value || "").toLowerCase().replace(/\s+/g, "");
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const API='/api/v1';
+const CAMPUS_DIRECTORY=[['Abuja (FCT)','NASENI Innovation Hub','No. 17, M.S. Haruna Avenue, Idu Industrial Area, P.M.B 391, Garki, Abuja'],['Benue','LEEF Centre',"Old Makurdi Road, Off Burnt Bricks, near St. Helen's Hospital, Otukpo"],['Ekiti','Kinplus Technologies','1st & 2nd Floor, Christore Building, Opp. Crunchies (around State Hospital), Similoluwa, Ado-Ekiti'],['Kwara','MalHub','1 Ilofa Road, GRA, Ilorin'],['Lagos','Pier Place','14 Montgomery Road, Yaba, Lagos'],['Plateau','nHub Jos','TAEN Business Complex, Jos'],['Rivers','CTEC','18 Tombia Street, GRA, Port Harcourt'],['Lagos (Ikorodu)','SAIL Innovation Lab','1, Muba Abiru Street, Ikorodu, Lagos'],['Lagos (Ikorodu)','SAIL STEM Lab','1, Muba Abiru Street, Ikorodu, Lagos'],['Kwara (Ilorin)','Ilorin Innovation Hub','Ahmadu Bello Way, Ilorin']];
+const state={authenticated:false,profile:null,campuses:[],campus:'',date:'',status:'',session:'morning',runId:'',qrExpires:0,qrTimer:null,qrLoading:false,refreshTimer:null,search:'',rosterSearch:'',students:[],rows:[],summary:null};
+const sessionMeta={morning:{title:'Morning',icon:'☀',action:'Check-in'},afternoon:{title:'Afternoon',icon:'◒',action:'Check-in'},evening:{title:'Evening',icon:'☾',action:'Check-out'}};
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function initials(s){return String(s||'?').trim().split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();}
+function watClock(){return new Intl.DateTimeFormat('en-NG',{timeZone:'Africa/Lagos',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date());}
+function dateLabel(d){return new Intl.DateTimeFormat('en-NG',{timeZone:'Africa/Lagos',weekday:'short',day:'numeric',month:'short',year:'numeric'}).format(new Date(`${d}T12:00:00`));}
+function showToast(s){const t=$('#toast');t.textContent=s;t.classList.add('show');clearTimeout(showToast.timer);showToast.timer=setTimeout(()=>t.classList.remove('show'),3000);}
+function setTheme(theme){const dark=theme==='dark';document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('l2e-theme',dark?'dark':'light');const b=$('#themeToggle');if(b){b.querySelector('span').textContent=dark?'☀':'☾';b.querySelector('b').textContent=dark?'Light':'Dark';b.setAttribute('aria-label',`Switch to ${dark?'light':'dark'} mode`);}}
+function stopQrRefresh(){if(state.qrTimer)clearInterval(state.qrTimer);state.qrTimer=null;$('#qrRefresh').textContent='—';}
+function startQrRefresh(){stopQrRefresh();state.qrTimer=setInterval(()=>{const remaining=Math.max(0,Math.ceil((state.qrExpires-Date.now())/1000));$('#qrRefresh').textContent=`Refresh in ${remaining}s`;if(remaining<=8&&!state.qrLoading)getQr();},1000);}
+function csrfToken(){return document.cookie.split(';').map(v=>v.trim()).find(v=>v.startsWith('csrftoken='))?.slice(10)||'';}
+async function api(path,opts={}){const headers={...(opts.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(state.authenticated?{'X-CSRFToken':csrfToken()} : {}),...(opts.headers||{})};const res=await fetch(path,{credentials:'same-origin',...opts,headers});const type=res.headers.get('content-type')||'';const data=type.includes('application/json')?await res.json():await res.text();if(res.status===401&&state.authenticated){state.authenticated=false;gateApp();}if(!res.ok)throw new Error(data?.message||data?.detail||data?.error||`Request failed (${res.status}).`);return data;}
+function paintProfile(name){const n=name||'Mentor';$('#profileName').textContent=n;$('#profileAvatar').textContent=initials(n).slice(0,1);$('#topProfileButton').textContent=initials(n).slice(0,1);}
+function gateApp(){state.authenticated=false;document.querySelector('.auth-gate')?.remove();const markup=`<div class="auth-gate"><form class="auth-card" id="authForm"><img src="/assets/learn2earn-logo.svg" class="auth-logo" alt="Learn2Earn"><div class="section-kicker">ATTENDANCE · MENTOR CONSOLE</div><h1>Welcome to your<br><em>attendance hub.</em></h1><p>Sign in with your individual Learn2Earn mentor or administrator account.</p><label>Username<input name="username" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button button-dark" type="submit">Sign in <span>↗</span></button><div class="form-message" id="authMessage"></div><small class="auth-help">First admin? Run <code>python manage.py createsuperuser</code> in the project folder.</small></form></div>`;document.body.insertAdjacentHTML('beforeend',markup);$('#authForm').addEventListener('submit',async e=>{e.preventDefault();const m=$('#authMessage');try{const f=Object.fromEntries(new FormData(e.currentTarget));const r=await api(`${API}/auth/mentor/login/`,{method:'POST',body:JSON.stringify(f)});state.authenticated=true;state.profile=null;paintProfile(r.display_name);document.querySelector('.auth-gate').remove();await boot();}catch(err){m.textContent=err.message;m.classList.add('error');}});}
+function canCorrect(campusId){const p=state.profile||{};return ['super_admin','campus_admin'].includes(p.role)||(p.role==='mentor'&&(p.campus_access||[]).some(x=>x.campus_id===campusId&&x.can_correct_attendance));}
+function badge(status){const label=({on_time:'On Time',late:'Late',absent:'Absent'})[status]||status||'—';const cls=status==='on_time'?'badge-on-time':status==='late'?'badge-late':'badge-absent';return `<span class="badge ${cls}">${esc(label)}</span>`;}
+function avatar(name,i=0){return `<span class="student-avatar ${['','av2','av3','av4'][i%4]}">${esc(initials(name))}</span>`;}
+function studentCell(x,i){return `<div class="student-cell">${avatar(x.full_name,i)}<div><div class="student-name">${esc(x.full_name)}</div><div class="student-user">@${esc(x.username)}</div></div></div>`;}
+function setPage(page){$$('.page').forEach(x=>x.classList.toggle('hidden',x.id!==`page-${page}`));$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.page===page));$('#crumb').textContent=({overview:'Overview',attendance:'Attendance',students:'Students',campuses:'Campuses',kiosk:'QR kiosk',archives:'Reports'})[page]||page;if(page==='kiosk')openKiosk();if(page==='students')loadStudents();if(page==='campuses')loadCampuses();if(page==='archives')loadArchives();}
+function fillCampusOptions(){const options=state.campuses.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');for(const id of ['campusSelector','studentCampus','kioskCampus']){const el=$(`#${id}`);if(!el)continue;const placeholder=id==='studentCampus'?'<option value="">Choose campus</option>':'';el.innerHTML=placeholder+options;if(id==='studentCampus')el.value=state.campus;else el.value=state.campus;}}
+async function loadCampuses(){const r=await api(`${API}/admin/campuses/`);state.campuses=r.results||r;fillCampusOptions();if(state.campuses.length&&!state.campus){state.campus=state.campuses[0].id;fillCampusOptions();}const region=$('#campusRegion'),template=$('#campusTemplate');if(region&&template){const existing=new Set(state.campuses.map(c=>c.name));const available=CAMPUS_DIRECTORY.filter(([,name])=>!existing.has(name));const regions=[...new Set(available.map(([place])=>place))];const selectedRegion=region.value;region.innerHTML='<option value="">Choose a state</option>'+regions.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');region.value=regions.includes(selectedRegion)?selectedRegion:'';const entries=available.filter(([place])=>place===region.value);template.innerHTML='<option value="">Choose a campus</option>'+entries.map(([,name,address])=>`<option value="${esc(name)}">${esc(name)} — ${esc(address)}</option>`).join('');template.disabled=!region.value;}if($('#campusList')){$('#campusList').innerHTML=state.campuses.length?state.campuses.map(c=>`<article class="campus-row"><span class="campus-symbol">⌖</span><div class="campus-info"><b>${esc(c.name)}</b><small>${esc(c.address||'Address not set')} · ${esc(c.timezone||'Africa/Lagos')}</small></div><span class="track-tag">${c.active?'Active':'Inactive'}</span><small class="campus-radius">${c.latitude&&c.longitude?`${esc(c.geofence_radius_m)} m geofence`:'Geofence not configured'}</small></article>`).join(''):'<div class="empty">No campuses are assigned to this account yet. Ask a super administrator to assign campus access.</div>';}}
+async function loadTracks(campusId){const el=$('#studentTrack');if(!el)return;try{const r=await api(`${API}/admin/tracks/?campus_id=${encodeURIComponent(campusId||'')}`);el.innerHTML='<option value="">No track selected</option>'+(r.results||[]).map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');}catch{el.innerHTML='<option value="">No track selected</option>';}}
+async function refresh(){if(!state.campus)return;const date=$('#dateFilter').value||new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Lagos',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());state.date=date;const params=new URLSearchParams({campus_id:state.campus,date});if(state.status)params.set('status',state.status);const attendance=await api(`${API}/mentor/attendance/?${params}`);const summary=await api(`${API}/mentor/attendance/summary/?${params}`);state.rows=attendance.results||[];state.summary=summary.summary;renderDashboard();}
+function renderDashboard(){const rows=state.rows,s=state.summary||{};$('#mChecked').textContent=s.present??0;$('#mOnTime').textContent=s.on_time??0;$('#mLate').textContent=s.late??0;$('#mStudents').textContent=s.active_students??0;if($('#kioskScans'))$('#kioskScans').textContent=s.present??0;if($('#kioskLate'))$('#kioskLate').textContent=s.late??0;$('#navCount').textContent=s.present??0;$('#heroDate').textContent=dateLabel(state.date||new Date().toISOString().slice(0,10));$('#heroClock').textContent=`${watClock()} WAT`;$('#topDate').textContent=dateLabel(state.date||new Date().toISOString().slice(0,10));const counts=Object.fromEntries(Object.keys(sessionMeta).map(k=>[k,rows.filter(x=>x.session_type===k&&x.status!=='absent').length]));$('#sessions').innerHTML=Object.keys(sessionMeta).map(k=>`<div class="session-chip"><span class="session-icon">${sessionMeta[k].icon}</span><div><b>${sessionMeta[k].title} · ${sessionMeta[k].action}</b><small>${({morning:'9:00 AM',afternoon:'1:00 PM',evening:'5:00 PM'})[k]}</small></div><span class="session-count">${counts[k]}</span></div>`).join('');const filtered=rows.filter(x=>(!state.search||`${x.full_name} ${x.username} ${x.track_name}`.toLowerCase().includes(state.search.toLowerCase())));const overview=filtered.slice(0,6);$('#attendanceBody').innerHTML=overview.length?overview.map((x,i)=>`<tr><td>${studentCell(x,i)}</td><td><span class="track-tag">${esc(x.track_name||'—')}</span></td><td class="session-text">${esc(sessionMeta[x.session_type]?.title||x.session_type)} · ${esc(x.attendance_action==='check_out'?'Out':'In')}</td><td class="time-text">${esc(x.scan_time_wat||'—')}</td><td>${badge(x.status)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No records for this date. Absences appear after each session closes.</td></tr>';$('#fullBody').innerHTML=filtered.length?filtered.map((x,i)=>`<tr><td>${studentCell(x,i)}</td><td>@${esc(x.username)}</td><td><span class="track-tag">${esc(x.track_name||'—')}</span></td><td>${esc(x.campus_name||'')}</td><td>${esc(sessionMeta[x.session_type]?.title||x.session_type)} · ${esc(x.attendance_action)}</td><td class="time-text">${esc(x.scan_time_wat||'—')}</td><td>${badge(x.status)}</td><td>${esc(x.source_label||x.source)}</td><td>${x.location_verified?'Verified':'—'}</td><td>${canCorrect(x.campus)?`<button class="row-action" data-attendance-edit data-id="${esc(x.id)}" data-student="${esc(x.student_id)}" data-session="${esc(x.session_type)}">Correct</button>`:'—'}</td></tr>`).join(''):'<tr><td colspan="9" class="empty">No matching attendance records.</td></tr>';$('#sheetSummary').innerHTML=`<b>${filtered.length}</b> records · ${s.present||0} present · ${s.late||0} late · ${s.absent||0} absent · ${s.not_checked_out||0} not checked out`;const feed=rows.filter(x=>x.status!=='absent').slice(0,8);$('#feedList').innerHTML=feed.length?feed.map((x,i)=>`<div class="feed-row">${avatar(x.full_name,i)}<div class="feed-main"><b>${esc(x.full_name)}</b><small>@${esc(x.username)} · ${esc(x.campus_name||'')}</small></div><div class="feed-right"><small>${esc(x.scan_time_wat)} WAT</small>${badge(x.status)}</div></div>`).join(''):'<div class="empty">New student check-ins will appear here.</div>';}
+async function loadStudents(){if(!state.campus)return;try{const p=new URLSearchParams({campus:state.campus,page_size:'100'});if(state.rosterSearch)p.set('search',state.rosterSearch);const r=await api(`${API}/admin/students/?${p}`);state.students=r.results||[];$('#rosterCount').textContent=`Students · ${r.count??state.students.length}`;$('#studentBody').innerHTML=state.students.length?state.students.map((s,i)=>`<tr><td>${studentCell(s,i)}</td><td>@${esc(s.username)}</td><td><span class="track-tag">${esc(s.track_name||'—')}</span></td><td>${esc(s.registration_date||'—')}</td><td>${s.active?`<button class="row-action danger" data-student-toggle="deactivate" data-id="${esc(s.id)}">Deactivate</button>`:`<button class="row-action" data-student-toggle="reactivate" data-id="${esc(s.id)}">Reactivate</button>`} <button class="row-action" data-student-transfer data-id="${esc(s.id)}">Transfer</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty">No students found. Add a student with the campus administrator account.</td></tr>';fillCampusOptions();await loadTracks(state.campus);}catch(e){showToast(e.message);}}
+async function loadArchives(){if(!state.campus)return;try{const r=await api(`${API}/admin/monthly-reports/?campus_id=${encodeURIComponent(state.campus)}`);const items=r.results||[];$('#archivesList').innerHTML=items.length?items.map(x=>`<div class="archive-row"><div><b>${esc(x.year)}-${String(x.month).padStart(2,'0')} · ${esc(x.campus)}</b><small>${esc(x.record_count)} records · ${x.closed?'Closed':'Reopened'} · ${esc(new Date(x.generated_at).toLocaleString())}</small></div><a class="archive-download" href="${esc(x.csv_url)}" data-download="${esc(x.csv_url)}">Download CSV ↓</a></div>`).join(''):'<div class="empty">No monthly reports yet. Only completed months can be closed.</div>';}catch(e){showToast(e.message);}}
+async function closeMonth(){if(!state.campus)return showToast('Choose a campus first.');try{const r=await api(`${API}/admin/monthly-close/`,{method:'POST',body:JSON.stringify({campus_id:state.campus})});const res=await fetch(r.csv_url,{credentials:'same-origin'});if(res.ok){const blob=await res.blob(),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${r.year}-${String(r.month).padStart(2,'0')}-attendance.csv`;a.click();URL.revokeObjectURL(a.href);}showToast(`Closed ${r.year}-${String(r.month).padStart(2,'0')} · ${r.record_count} records.`);await loadArchives();}catch(e){showToast(e.message);}}
+async function startSession(){if(!state.campus)return showToast('Choose a campus first.');try{const r=await api(`${API}/mentor/qr/start/`,{method:'POST',body:JSON.stringify({campus_id:state.campus,session_type:state.session})});state.runId=r.session_id;$('#sessionState').textContent='Session open';$('#startSession').disabled=true;$('#endSession').disabled=false;if(await getQr())startQrRefresh();showToast(`${sessionMeta[state.session].title} ${sessionMeta[state.session].action.toLowerCase()} session opened.`);}catch(e){showToast(e.message);}}
+async function getQr(){if(!state.runId||state.qrLoading)return false;state.qrLoading=true;let success=false;try{const r=await api(`${API}/mentor/qr/current/?campus_id=${encodeURIComponent(state.campus)}&session_type=${state.session}`);state.qrExpires=r.expires_at*1000;const img=await fetch(r.qr_image_url,{credentials:'same-origin'});if(!img.ok)throw Error(`Could not render QR (${img.status}).`);const blob=await img.blob(),old=$('#qrFrame img')?.src;$('#qrFrame').innerHTML=`<img alt="Live ${esc(r.session_type)} attendance QR" src="${URL.createObjectURL(blob)}">`;if(old?.startsWith('blob:'))URL.revokeObjectURL(old);$('#kioskLabel').textContent=`${state.session.toUpperCase()} · ${r.attendance_action.replace('_',' ').toUpperCase()}`;$('#kioskCampusName').textContent=String(r.campus).toUpperCase();$('#sessionState').textContent='Session open';$('#endSession').disabled=false;success=true;}catch(e){$('#qrFrame').innerHTML=`<div class="qr-wait">${esc(e.message)}</div>`;stopQrRefresh();}finally{state.qrLoading=false;}return success;}
+function openKiosk(){if(!state.campus)return;stopQrRefresh();state.runId='';$('#sessionState').textContent='Session closed';$('#startSession').disabled=false;$('#endSession').disabled=true;const url=`${API}/mentor/qr/current/?campus_id=${encodeURIComponent(state.campus)}&session_type=${state.session}`;api(url).then(async r=>{state.runId=r.session_id;$('#sessionState').textContent='Session open';$('#startSession').disabled=true;$('#endSession').disabled=false;if(await getQr())startQrRefresh();}).catch(()=>{ $('#qrFrame').innerHTML='<div class="qr-wait">Start a scheduled session<br>to show its live QR.</div>';});}
+async function endSession(){if(!state.runId)return;try{await api(`${API}/mentor/qr/end/`,{method:'POST',body:JSON.stringify({session_id:state.runId})});state.runId='';stopQrRefresh();$('#sessionState').textContent='Session closed';$('#qrFrame').innerHTML='<div class="qr-wait">Session ended.<br>Start another scheduled session when ready.</div>';$('#startSession').disabled=false;$('#endSession').disabled=true;showToast('Session closed. Existing QR tokens are revoked.');}catch(e){showToast(e.message);}}
+async function downloadProtected(url,filename){try{const r=await fetch(url,{credentials:'same-origin'});if(!r.ok)throw Error('Report download failed.');const a=document.createElement('a'),blob=await r.blob();a.href=URL.createObjectURL(blob);a.download=filename;a.click();URL.revokeObjectURL(a.href);}catch(e){showToast(e.message);}}
+async function openProfile(){try{const p=await api(`${API}/auth/mentor/profile/`);$('#displayNameInput').value=p.display_name;$('#profileMessage').textContent='';$('#profileModal').classList.remove('hidden');}catch(e){showToast(e.message);}}
+function events(){
+  $$('.nav-item').forEach(n=>n.addEventListener('click',()=>setPage(n.dataset.page)));$$('[data-page="attendance"]').forEach(n=>n.addEventListener('click',()=>setPage('attendance')));
+  $('#campusSelector').addEventListener('change',async e=>{stopQrRefresh();state.runId='';state.campus=e.target.value;fillCampusOptions();await loadTracks(state.campus);await refresh().catch(x=>showToast(x.message));if(state.page==='students')loadStudents();if(state.page==='kiosk')openKiosk();if(state.page==='archives')loadArchives();});
+  $('#studentCampus').addEventListener('change',e=>loadTracks(e.target.value));$('#kioskCampus').addEventListener('change',e=>{state.campus=e.target.value;$('#campusSelector').value=state.campus;fillCampusOptions();openKiosk();});
+  $('#dateFilter').addEventListener('change',()=>refresh().catch(e=>showToast(e.message)));$('#statusFilter').addEventListener('change',e=>{state.status=e.target.value;refresh().catch(x=>showToast(x.message));});$('#quickStatusFilter').addEventListener('change',e=>{$('#statusFilter').value=e.target.value;state.status=e.target.value;refresh().catch(x=>showToast(x.message));});$('#searchInput').addEventListener('input',e=>{state.search=e.target.value;renderDashboard();});$('#rosterSearch').addEventListener('input',e=>{state.rosterSearch=e.target.value;loadStudents();});
+  $$('.session-choice').forEach(b=>b.addEventListener('click',()=>{stopQrRefresh();$$('.session-choice').forEach(x=>x.classList.toggle('selected',x===b));state.session=b.dataset.session;state.runId='';$('#startSession').disabled=false;$('#endSession').disabled=true;$('#sessionState').textContent='Session closed';$('#qrFrame').innerHTML='<div class="qr-wait">Start this scheduled session<br>to show its live QR.</div>';}));$('#startSession').addEventListener('click',startSession);$('#endSession').addEventListener('click',endSession);$('#refresh').addEventListener('click',()=>refresh().catch(e=>showToast(e.message)));
+  $('#studentForm').addEventListener('submit',async e=>{e.preventDefault();const msg=$('#formMessage'),f=Object.fromEntries(new FormData(e.currentTarget));f.username=f.username.toLowerCase().replace(/\s+/g,'');try{await api(`${API}/auth/student/register/`,{method:'POST',body:JSON.stringify(f)});e.currentTarget.reset();msg.textContent='Student account created.';msg.classList.remove('error');await loadStudents();}catch(x){msg.textContent=x.message;msg.classList.add('error');}});
+  $('#campusForm').addEventListener('submit',async e=>{e.preventDefault();const msg=$('#campusMessage'),f=Object.fromEntries(new FormData(e.currentTarget));for(const k of ['latitude','longitude','geofence_radius_m'])if(f[k]==='')delete f[k];try{await api(`${API}/admin/campuses/`,{method:'POST',body:JSON.stringify(f)});e.currentTarget.reset();msg.textContent='Campus created.';msg.classList.remove('error');await loadCampuses();await refresh();}catch(x){msg.textContent=x.message;msg.classList.add('error');}});
+  $('#campusDirectoryForm').addEventListener('submit',async e=>{e.preventDefault();const msg=$('#campusDirectoryMessage'),name=$('#campusTemplate').value;try{const r=await api(`${API}/admin/campuses/add-directory-campus/`,{method:'POST',body:JSON.stringify({name})});msg.textContent=r.created?'Campus added. Configure its coordinates before using QR attendance.':'That campus is already in the directory.';msg.classList.remove('error');await loadCampuses();await refresh();}catch(x){msg.textContent=x.message;msg.classList.add('error');}});
+  $('#campusRegion').addEventListener('change',()=>{const region=$('#campusRegion').value,existing=new Set(state.campuses.map(c=>c.name)),items=CAMPUS_DIRECTORY.filter(([place,name])=>place===region&&!existing.has(name));const select=$('#campusTemplate');select.innerHTML='<option value="">Choose a campus</option>'+items.map(([,name,address])=>`<option value="${esc(name)}">${esc(name)} — ${esc(address)}</option>`).join('');select.disabled=!region;});
+  $('#closeMonthBtn').addEventListener('click',closeMonth);$('#exportBtn').addEventListener('click',()=>{if(!state.campus)return;const p=new URLSearchParams({campus_id:state.campus,date:$('#dateFilter').value||'',format:'csv'});downloadProtected(`${API}/mentor/attendance/?${p}`,`${state.date||'attendance'}-attendance.csv`);});
+  $('#profileButton').addEventListener('click',openProfile);$('#topProfileButton').addEventListener('click',openProfile);$('#closeProfile').addEventListener('click',()=>$('#profileModal').classList.add('hidden'));$('#profileModal').addEventListener('click',e=>{if(e.target===$('#profileModal'))$('#profileModal').classList.add('hidden');});
+  $('#profileForm').addEventListener('submit',async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.currentTarget));try{const r=await api(`${API}/auth/mentor/profile/`,{method:'PATCH',body:JSON.stringify(f)});paintProfile(r.display_name);$('#profileMessage').textContent='Profile saved.';$('#profileMessage').classList.remove('error');e.currentTarget.password.value='';}catch(x){$('#profileMessage').textContent=x.message;$('#profileMessage').classList.add('error');}});
+  $('#signOutButton').addEventListener('click',async()=>{try{await api(`${API}/auth/logout/`,{method:'POST',body:'{}'});}catch{}localStorage.removeItem('l2e_staff_token');state.token='';location.reload();});
+  document.body.addEventListener('click',e=>{const a=e.target.closest('[data-download]');if(a){e.preventDefault();downloadProtected(a.dataset.download,'attendance-report.csv');}});
 }
-function escapeHtml(value = "") {
-  return String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function advancedEvents(){
+  setTheme(localStorage.getItem('l2e-theme')||'light');$('#themeToggle').addEventListener('click',()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
+  $('#studentImportForm').addEventListener('submit',async e=>{e.preventDefault();const msg=$('#importMessage'),file=e.currentTarget.querySelector('input[type=file]').files[0];if(!file)return;const form=new FormData();form.append('file',file);try{const r=await api(`${API}/admin/students/bulk_import/?campus_id=${encodeURIComponent(state.campus)}`,{method:'POST',body:form});msg.textContent=`Imported ${r.created}; ${r.errors.length} row errors.`;msg.classList.toggle('error',r.errors.length>0);await loadStudents();}catch(x){msg.textContent=x.message;msg.classList.add('error');}});
+  $('#studentBody').addEventListener('click',async e=>{const toggle=e.target.closest('[data-student-toggle]'),transfer=e.target.closest('[data-student-transfer]');try{if(toggle){await api(`${API}/admin/students/${toggle.dataset.id}/${toggle.dataset.studentToggle}/`,{method:'POST',body:'{}'});await loadStudents();showToast('Student status updated.');}if(transfer){const destinations=state.campuses.filter(c=>c.id!==state.campus);if(!destinations.length)return showToast('No other authorised campus is available.');const choice=prompt(`Enter destination campus UUID:\n${destinations.map(c=>`${c.name}: ${c.id}`).join('\n')}`);if(!choice)return;const reason=prompt('Reason for campus transfer:');if(!reason)return;await api(`${API}/admin/students/${transfer.dataset.id}/transfer/`,{method:'POST',body:JSON.stringify({campus_id:choice.trim(),reason})});await loadStudents();showToast('Student transferred; historical campus records are unchanged.');}}catch(x){showToast(x.message);}});
+  $('#fullBody').addEventListener('click',async e=>{const button=e.target.closest('[data-attendance-edit]');if(!button)return;const answer=prompt('New status: type on_time, late, or absent');if(!answer)return;const newStatus=answer.trim().toLowerCase();if(!['on_time','late','absent'].includes(newStatus))return showToast('Status must be on_time, late, or absent.');const reason=prompt('Reason for the attendance correction:');if(!reason)return;const payload={status:newStatus,reason};if(button.dataset.id)payload.attendance_id=button.dataset.id;else{payload.student_id=button.dataset.student;payload.session_type=button.dataset.session;}try{await api(`${API}/mentor/attendance/manual/`,{method:'POST',body:JSON.stringify(payload)});await refresh();showToast('Attendance adjustment saved in the audit history.');}catch(x){showToast(x.message);}});
 }
-/* Month key (YYYY-MM) in West Africa Time, so the "current month" matches the school's clock. */
-function watMonthKey(value = new Date()) {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 7);
-  const parts = new Intl.DateTimeFormat("en-CA", {timeZone: WAT_TIMEZONE, year: "numeric", month: "2-digit"}).formatToParts(date);
-  const get = (type) => parts.find(p => p.type === type)?.value;
-  return `${get("year")}-${get("month")}`;
-}
-function showToast(message) {
-  const toast = $("toast");
-  toast.textContent = message;
-  toast.classList.add("show");
-  window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 2800);
-}
-function showAuthAlert(message, success = false) {
-  const box = $("authAlert");
-  box.textContent = message;
-  box.classList.toggle("success", success);
-  box.classList.remove("hidden");
-}
-function clearAuthAlert() { $("authAlert").classList.add("hidden"); }
-function setConnectionNote(message) { $("connectionNote").textContent = message; }
-
-function saveSession() {
-  if (!CONFIG.PERSIST_SESSION) return;
-  try {
-    window.sessionStorage.setItem(CONFIG.SESSION_STORAGE_KEY, JSON.stringify({token: state.token, student: state.student}));
-  } catch {}
-}
-function clearSession() {
-  try { window.sessionStorage.removeItem(CONFIG.SESSION_STORAGE_KEY); } catch {}
-}
-function restoreSession() {
-  if (!CONFIG.PERSIST_SESSION) return false;
-  try {
-    const raw = window.sessionStorage.getItem(CONFIG.SESSION_STORAGE_KEY);
-    if (!raw) return false;
-    const saved = JSON.parse(raw);
-    if (!saved?.token || !saved?.student) return false;
-    state.token = saved.token;
-    state.student = saved.student;
-    return true;
-  } catch { return false; }
-}
-
-async function apiRequest(path, options = {}) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (state.token) headers.Authorization = `Bearer ${state.token}`;
-  let response;
-  try {
-    response = await fetch(apiUrl(path), { ...options, headers });
-  } catch {
-    const error = new Error("Cannot reach the attendance server. Check your connection or API address.");
-    error.network = true;
-    throw error;
-  }
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = body.detail || body.message || body.error || "The request could not be completed.";
-    const error = new Error(typeof detail === "string" ? detail : "Please check your details and try again.");
-    error.status = response.status;
-    error.body = body;
-    if (response.status === 401 && state.token) {
-      // Token expired or was revoked: drop it and send the student back to sign in.
-      state.token = null;
-      state.student = null;
-      clearSession();
-      error.sessionExpired = true;
-    }
-    throw error;
-  }
-  return body;
-}
-
-function switchAuth(mode) {
-  clearAuthAlert();
-  $("loginForm").classList.toggle("hidden", mode !== "login");
-  $("registerForm").classList.toggle("hidden", mode !== "register");
-  document.querySelectorAll(".auth-tab").forEach(tab => tab.classList.toggle("active", tab.dataset.auth === mode));
-}
-function showApp() {
-  $("authScreen").classList.add("hidden");
-  $("topName").textContent = state.student.full_name;
-  $("topUsername").textContent = `@${state.student.username}`;
-  $("topAvatar").textContent = String(state.student.full_name || "?").trim().charAt(0).toUpperCase();
-  $("welcomeName").textContent = String(state.student.full_name || "").split(" ")[0];
-  $("profileName").textContent = state.student.full_name;
-  $("profileUsername").textContent = state.student.username;
-  showView("dashboard");
-  loadDashboard();
-}
-function showAuth() {
-  $("authScreen").classList.remove("hidden");
-  stopScanner();
-}
-function showView(name) {
-  if (!$(`${name}View`)) name = "dashboard";
-  state.currentView = name;
-  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-  $(`${name}View`).classList.add("active");
-  document.querySelectorAll(".nav-item[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === name));
-  $("pageTitle").textContent = ({dashboard:"Dashboard",scanner:"Scan attendance",history:"Attendance history"})[name] || "Dashboard";
-  $("sidebar").classList.remove("open");
-  if (name !== "scanner") stopScanner();
-  if (name === "history") renderHistory();
-}
-
-async function registerStudent(event) {
-  event.preventDefault();
-  if (state.busy) return;
-  clearAuthAlert();
-  const fullName = $("fullName").value.trim().replace(/\s+/g, " ");
-  const username = normalizeUsername($("registerUsername").value);
-  const password = $("registerPassword").value;
-  const confirm = $("confirmPassword").value;
-  if (fullName.length < 2) return showAuthAlert("Enter your full name as it appears on your student record.");
-  if (!/^[a-z0-9_-]{3,30}$/.test(username)) return showAuthAlert("Username must be 3–30 characters and contain only lowercase letters, numbers, underscores or hyphens. Spaces are removed automatically.");
-  if (password.length < 8) return showAuthAlert("Your password must contain at least 8 characters.");
-  if (password !== confirm) return showAuthAlert("The passwords do not match.");
-
-  const button = event.submitter || $("registerFormEl").querySelector('button[type="submit"]');
-  const label = button.innerHTML;
-  state.busy = true; button.disabled = true; button.textContent = "Creating account…";
-  try {
-    const result = await apiRequest("/auth/register", {method:"POST", body:JSON.stringify({full_name:fullName, username, password})});
-    $("registerPassword").value = "";
-    $("confirmPassword").value = "";
-    if (result.access_token && (result.student || result.user)) {
-      state.token = result.access_token;
-      state.student = result.student || result.user;
-      saveSession();
-      showApp();
-      showToast("Your account has been created.");
-    } else {
-      showAuthAlert("Account created. Please sign in with your new details.", true);
-      switchAuth("login");
-      $("loginUsername").value = username;
-      $("loginPassword").focus();
-    }
-  } catch (error) {
-    showAuthAlert(error.message);
-  } finally {
-    state.busy = false; button.disabled = false; button.innerHTML = label;
-  }
-}
-
-async function loginStudent(event) {
-  event.preventDefault();
-  if (state.busy) return;
-  clearAuthAlert();
-  const username = normalizeUsername($("loginUsername").value);
-  const password = $("loginPassword").value;
-  if (!username || !password) return showAuthAlert("Enter your attendance username and password.");
-  const button = event.submitter || $("loginFormEl").querySelector('button[type="submit"]');
-  const label = button.innerHTML;
-  state.busy = true; button.disabled = true; button.textContent = "Signing in…";
-  try {
-    const result = await apiRequest("/auth/login", {method:"POST", body:JSON.stringify({username, password})});
-    state.token = result.access_token;
-    state.student = result.student || result.user;
-    if (!state.token || !state.student) throw new Error("The login response is missing access_token or student details. See API_CONTRACT.md.");
-    $("loginPassword").value = "";
-    saveSession();
-    showApp();
-    showToast("Welcome back!");
-  } catch (error) {
-    showAuthAlert(error.message);
-  } finally {
-    state.busy = false; button.disabled = false; button.innerHTML = label;
-  }
-}
-
-function handleSessionExpired() {
-  state.records = []; state.historyRecords = []; state.totalSessions = null;
-  showAuth();
-  switchAuth("login");
-  showAuthAlert("Your session ended. Please sign in again.");
-}
-
-async function loadDashboard() {
-  const month = watMonthKey();
-  try {
-    const result = await apiRequest(`/students/me/attendance?month=${encodeURIComponent(month)}`);
-    state.records = result.records || result.items || [];
-    state.totalSessions = result.total_sessions ?? null;
-    renderDashboard();
-    if ($("monthFilter").value === month) {
-      state.historyRecords = state.records;
-      renderHistory();
-    }
-  } catch (error) {
-    if (error.sessionExpired) return handleSessionExpired();
-    if (state.token) showToast(error.message);
-    renderDashboard();
-  }
-}
-
-function recordStatus(record) {
-  return String(record.status || (record.is_late ? "late" : "on_time")).toLowerCase();
-}
-function isLate(record) { return recordStatus(record) === "late"; }
-function statusMarkup(record) {
-  return `<span class="status-pill ${isLate(record) ? "late" : "on-time"}">${isLate(record) ? "Late" : "On Time"}</span>`;
-}
-function recordDate(record) {
-  return record.attended_at || record.timestamp || record.checked_in_at || record.scan_time || record.date || "";
-}
-function watParts(value) {
-  if (!value) return {date:"—",time:"—"};
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return {date:String(value),time:"—"};
-  return {
-    date:new Intl.DateTimeFormat("en-GB",{timeZone:WAT_TIMEZONE,day:"2-digit",month:"short",year:"numeric"}).format(date),
-    time:new Intl.DateTimeFormat("en-GB",{timeZone:WAT_TIMEZONE,hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).format(date)
-  };
-}
-function renderRows(target, records) {
-  const body = $(target);
-  if (!records.length) { body.innerHTML = '<tr><td colspan="4" class="empty-cell">No attendance records found.</td></tr>'; return; }
-  body.innerHTML = records.map(r => {
-    const t = watParts(recordDate(r));
-    const session = r.session_name || r.session?.name || "Attendance session";
-    return `<tr><td><strong>${escapeHtml(session)}</strong></td><td>${escapeHtml(t.date)}</td><td>${escapeHtml(t.time)}</td><td>${statusMarkup(r)}</td></tr>`;
-  }).join("");
-}
-function renderDashboard() {
-  const records = state.records;
-  const onTime = records.filter(r => !isLate(r)).length;
-  const late = records.length - onTime;
-  $("statAttended").textContent = records.length;
-  $("statOnTime").textContent = onTime;
-  $("statLate").textContent = late;
-  // Attendance rate needs the total number of sessions from the server; never invent a denominator.
-  const total = Number(state.totalSessions);
-  $("statRate").textContent = Number.isFinite(total) && total > 0
-    ? `${Math.min(100, Math.round(records.length / total * 100))}%`
-    : "—";
-  renderRows("recentRows", records.slice(0,5));
-}
-function renderHistory() {
-  const month = $("monthFilter").value || watMonthKey();
-  const filtered = state.historyRecords.filter(r => watMonthKey(recordDate(r)) === month);
-  renderRows("historyRows", filtered);
-  $("historyCount").textContent = `${filtered.length} record${filtered.length === 1 ? "" : "s"}`;
-}
-async function refreshAttendance() {
-  const month = $("monthFilter").value || watMonthKey();
-  try {
-    const result = await apiRequest(`/students/me/attendance?month=${encodeURIComponent(month)}`);
-    state.historyRecords = result.records || result.items || [];
-    if (month === watMonthKey()) {
-      state.records = state.historyRecords;
-      state.totalSessions = result.total_sessions ?? state.totalSessions;
-      renderDashboard();
-    }
-    renderHistory();
-  } catch (error) {
-    if (error.sessionExpired) return handleSessionExpired();
-    showToast(error.message);
-    renderHistory();
-  }
-}
-
-async function startScanner() {
-  const notice = $("scanNotice");
-  notice.classList.add("hidden");
-  if (!window.Html5Qrcode) { notice.textContent = "The QR scanner library did not load. Check your internet connection and refresh."; notice.classList.remove("hidden"); return; }
-  if (state.scanLocked) { notice.textContent = "Your previous scan is being verified. Please wait."; notice.classList.remove("hidden"); return; }
-  if (state.scannerRunning) return;
-  try {
-    if (!state.scanner) state.scanner = new window.Html5Qrcode("reader");
-    const cameras = await window.Html5Qrcode.getCameras();
-    if (!cameras || !cameras.length) throw new Error("No camera was found on this device.");
-    const camera = cameras.find(c => /back|rear|environment/i.test(c.label || "")) || cameras[cameras.length - 1];
-    await state.scanner.start(camera.id, {fps:10,qrbox:{width:230,height:230},aspectRatio:1.0}, onQrDecoded, () => {});
-    state.scannerRunning = true;
-    $("startScanBtn").disabled = true; $("stopScanBtn").disabled = false;
-  } catch (error) {
-    notice.textContent = error?.message || "Could not start the camera. Check browser permissions and use HTTPS.";
-    notice.classList.remove("hidden");
-    $("startScanBtn").disabled = false; $("stopScanBtn").disabled = true;
-  }
-}
-async function stopScanner() {
-  if (state.scanner && state.scannerRunning) {
-    try { await state.scanner.stop(); } catch {}
-    state.scannerRunning = false;
-  }
-  if ($("startScanBtn")) $("startScanBtn").disabled = false;
-  if ($("stopScanBtn")) $("stopScanBtn").disabled = true;
-}
-async function onQrDecoded(decodedText) {
-  // The scanner is stopped after a decode, so a second callback can only mean a
-  // very fast repeat frame. The server is the authority on duplicates, so let it answer.
-  if (state.scanLocked) return;
-  state.scanLocked = true;
-  await stopScanner();
-  const notice = $("scanNotice");
-  notice.textContent = "QR captured. Verifying your attendance…";
-  notice.classList.remove("hidden");
-  try {
-    const result = await apiRequest("/attendance/check-in", {method:"POST",body:JSON.stringify({qr_payload:decodedText})});
-    if (result.already_checked_in || result.code === "DUPLICATE_ATTENDANCE") {
-      notice.textContent = "Already checked in for this session. Your existing attendance record has not been changed.";
-      showToast("Already checked in for this session.");
-      return;
-    }
-    notice.classList.add("hidden");
-    showConfirmation(result);
-    await loadDashboard();
-  } catch (error) {
-    if (error.sessionExpired) return handleSessionExpired();
-    const duplicate = error.body?.already_checked_in || error.body?.code === "DUPLICATE_ATTENDANCE" || /already|duplicate|checked in/i.test(error.message);
-    notice.textContent = duplicate ? "Already checked in for this session." : error.message;
-    if (duplicate) showToast("Already checked in for this session.");
-  } finally {
-    state.scanLocked = false;
-  }
-}
-function showConfirmation(result) {
-  const student = result.student || state.student || {};
-  const stamp = result.attended_at || result.timestamp || result.checked_in_at || new Date().toISOString();
-  const parts = watParts(stamp);
-  const late = String(result.status || (result.is_late ? "late" : "on_time")).toLowerCase() === "late";
-  $("confirmName").textContent = student.full_name || "—";
-  $("confirmUsername").textContent = student.username || "—";
-  $("confirmSession").textContent = result.session_name || result.session?.name || "Current session";
-  $("confirmDate").textContent = result.date || parts.date;
-  $("confirmTime").textContent = result.time_wat || parts.time;
-  $("confirmStatus").textContent = late ? "LATE" : "ON TIME";
-  $("confirmStatus").classList.toggle("late", late);
-  $("confirmationModal").classList.remove("hidden");
-  $("closeConfirmation").focus();
-}
-function closeConfirmation(goDashboard = true) {
-  $("confirmationModal").classList.add("hidden");
-  if (goDashboard) showView("dashboard");
-}
-async function logout() {
-  try { await apiRequest("/auth/logout",{method:"POST",body:"{}"}); } catch {}
-  state.token = null; state.student = null; state.records = []; state.historyRecords = []; state.totalSessions = null;
-  clearSession();
-  showAuth(); switchAuth("login"); showView("dashboard");
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  $("year").textContent = new Date().getFullYear();
-  $("monthFilter").value = watMonthKey();
-  switchAuth("login");
-  setConnectionNote(CONFIG.DEMO_MODE
-    ? "Demo mode · records stay in this browser only"
-    : `API: ${CONFIG.API_BASE_URL} · Configure this address to match Engineer B's server.`);
-
-  document.querySelectorAll("[data-auth]").forEach(b => b.addEventListener("click", () => switchAuth(b.dataset.auth)));
-  document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
-  document.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => showView(b.dataset.go)));
-  $("registerUsername").addEventListener("input", e => { const p = e.target.selectionStart; e.target.value = normalizeUsername(e.target.value); e.target.setSelectionRange(p, p); });
-  $("loginUsername").addEventListener("input", e => { const p = e.target.selectionStart; e.target.value = normalizeUsername(e.target.value); e.target.setSelectionRange(p, p); });
-  $("registerFormEl").addEventListener("submit", registerStudent);
-  $("loginFormEl").addEventListener("submit", loginStudent);
-  $("dashboardScanBtn").addEventListener("click", () => showView("scanner"));
-  $("startScanBtn").addEventListener("click", startScanner);
-  $("stopScanBtn").addEventListener("click", stopScanner);
-  $("logoutBtn").addEventListener("click", logout);
-  $("menuBtn").addEventListener("click", () => $("sidebar").classList.toggle("open"));
-  $("monthFilter").addEventListener("change", refreshAttendance);
-  $("closeConfirmation").addEventListener("click", () => closeConfirmation());
-  $("confirmationModal").addEventListener("click", e => { if (e.target === $("confirmationModal")) closeConfirmation(false); });
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && !$("confirmationModal").classList.contains("hidden")) closeConfirmation(false);
-  });
-
-  if (restoreSession()) {
-    showApp();
-  }
-});
+async function boot(){try{state.authenticated=true;const p=state.profile||await api(`${API}/auth/mentor/profile/`);state.profile=p;paintProfile(p.display_name);await loadCampuses();if(!state.campuses.length){showToast('This account has no campus access yet. Use Django Admin to assign a campus.');return;}state.date=new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Lagos',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());$('#dateFilter').value=state.date;await loadTracks(state.campus);await refresh();await loadStudents();setInterval(()=>{$('#heroClock').textContent=`${watClock()} WAT`;$('#kioskTime').textContent=`${watClock()} WAT`;},1000);state.refreshTimer=setInterval(()=>refresh().catch(()=>{}),15000);}catch(e){showToast(e.message);}}
+events();advancedEvents();async function init(){try{state.authenticated=true;state.profile=await api(`${API}/auth/mentor/profile/`);await boot();}catch{state.authenticated=false;gateApp();}}init();
