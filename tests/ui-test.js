@@ -281,6 +281,21 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const rows = await res.json();
     return Array.isArray(rows) ? rows.map((r) => r.status) : [];
   });
+  const classes = await page.evaluate(() => ({
+    late: window.statusClass('late'),
+    absent: window.statusClass('absent'),
+    present: window.statusClass('present'),
+    legacy: window.statusClass('on_time'),
+    unknown: window.statusClass('excused'),
+    empty: window.statusClass(''),
+  }));
+  check('late classifies as late', classes.late === 'late', classes.late);
+  check('absent classifies as absent', classes.absent === 'absent', classes.absent);
+  check('present classifies as on-time', classes.present === 'on-time', classes.present);
+  check('legacy on_time classifies as on-time', classes.legacy === 'on-time', classes.legacy);
+  check('unknown status is neutral, never on-time', classes.unknown === 'neutral', classes.unknown);
+  check('empty status is neutral', classes.empty === 'neutral', classes.empty);
+
   check('history statuses are backend vocabulary', badge.every((s) => ['present', 'late', 'absent'].includes(s)), JSON.stringify(badge.slice(0, 4)));
 
   // Expected HTTP error responses (401/403/409) are logged by Chrome as resource errors;

@@ -149,7 +149,11 @@ backend decides that, not the portal.
 | `late` | Late | amber badge |
 | `absent` | Absent | red badge |
 | legacy `on_time` | On Time | green badge, still accepted |
-| anything else | the raw value | shown verbatim |
+| anything else | the raw value | shown verbatim, neutral grey badge |
+
+`statusClass()` colours only `late`, `absent` and the on-time family (`present`, legacy
+`on_time`). Anything unrecognised is neutral grey, so an unknown backend status is never
+mistaken for a good one.
 
 The raw value is always kept in `data-status` on the badge, and the portal never derives
 status from the device clock. If Engineer B renames a value, the badge follows with no code

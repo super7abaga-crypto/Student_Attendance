@@ -76,11 +76,16 @@ function statusLabel(status) {
   return STATUS_LABELS[key] || key.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Badge colour only. The text always comes from the backend; an unrecognised status
+// must not be dressed up as a good one, so it gets a neutral grey instead.
+const ON_TIME_ALIASES = ["present", "on_time", "on-time", "ontime"];
+
 function statusClass(status) {
   const key = String(status || "").trim().toLowerCase();
   if (key === "late") return "late";
   if (key === "absent") return "absent";
-  return "on-time";
+  if (ON_TIME_ALIASES.includes(key)) return "on-time";
+  return "neutral";
 }
 
 function escapeHtml(value) {
