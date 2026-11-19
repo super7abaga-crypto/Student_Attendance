@@ -61,6 +61,9 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+/data/
+/staticfiles/
+openapi.yaml
 
 # Flask stuff:
 instance/
@@ -221,12 +224,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-
-# Learn2Earn student portal
-.DS_Store
-Thumbs.db
-.env
-.env.*
-!.env.example
-dev/.data.json
-.vscode/*.log
