@@ -63,6 +63,7 @@ assets/
   learn2earn-mark.png       mark-only crop
 vendor/
   html5-qrcode.min.js       vendored scanner library (CDN fallback in index.html)
+  qrcode.min.js             vendored QR library for the dev kiosk
 dev/
   kiosk.html                dev-only page that shows a live 30-second test QR
 server.py                   dev-only mock of Engineer B's student endpoints
@@ -144,14 +145,20 @@ backend decides that, not the portal.
 
 | Backend value | Shown as | Notes |
 |---|---|---|
-| `on_time` | On Time | green badge |
 | `present` | Present | green badge |
 | `late` | Late | amber badge |
 | `absent` | Absent | red badge |
+| legacy `on_time` | On Time | green badge, still accepted |
 | anything else | the raw value | shown verbatim |
 
-The raw value is always kept in `data-status` on the badge. The portal never derives status
-from the device clock.
+The raw value is always kept in `data-status` on the badge, and the portal never derives
+status from the device clock. If Engineer B renames a value, the badge follows with no code
+change.
+
+`attendance_action` is rendered verbatim in the confirmation card's BACKEND ACTION row and
+kept in `data-action`. The portal does not branch on it: duplicates are detected from HTTP 409
+plus `code: duplicate_attendance`. The authoritative enum is still outstanding from Engineer B
+(see `API_CONTRACT.md`); the mock emits `checked_in` only so the field can be tested.
 
 Current contract cutoffs (WAT): morning **09:10**, afternoon **13:10**, evening **17:10**; a
 scan exactly at the cutoff is Late. An earlier instruction said evening 17:15, so the two
@@ -244,6 +251,9 @@ pointing at Django; camera and GPS then need `localhost` or HTTPS.
 | `CAMPUS_RADIUS_M` | `300` | mock geofence radius |
 | `MAX_ACCURACY_M` | `100` | reject fixes worse than this |
 | `SESSION_OPEN_MINUTES` | `180` | how long a session accepts scans |
+| `DATA_FILE` | `dev/.data.json` | where the mock persists its data |
+| `MOCK_NOW_WAT` | unset | pins the mock clock, e.g. `09:10`, so cutoffs are testable |
+| `MOCK_ATTENDANCE_ACTION` | `checked_in` | mock-only value for `attendance_action` |
 
 `app.js`: `CONFIG.API_BASE_URL`, `SESSION_STORAGE_KEY`, `SESSION_HOURS` (12), `GPS_OPTIONS`,
 `RECENT_ROWS`. No secrets live in the frontend, and none should ever be added.
@@ -272,12 +282,44 @@ In the browser: sign in, refresh (session must survive), open history, filter a 
 records, then scan the kiosk QR. Test the failure paths by moving the geolocation, denying
 location, and scanning an expired code.
 
-Browser tests were automated with Playwright during this revision (58 checks: login, session
-restore, logout, 401, history, month filter, scan, duplicate, expired, malformed, wrong campus,
-GPS denied, scan locking, retry, `/student/` assets, three viewports). The suite lives outside
-this repository; screenshots are in [`docs/screenshots/`](docs/screenshots).
+### Automated suites (in this repository)
 
-**These are mock tests.** Nothing here proves behaviour against Engineer B's backend.
+Both suites are self-contained: they start their own mock on a free port with fixed dev
+secrets and a throwaway data file, so they never touch `dev/.data.json` and never need a
+server running first.
+
+```bash
+# API contract suite: standard library only, no install
+python3 tests/api-test.py
+
+# Browser suite: installs playwright-core, drives the real Chrome/Chromium
+cd tests
+npm install
+npm test
+```
+
+`tests/api-test.py` runs 48 checks: login success and failure, Token scheme (Bearer rejected),
+bare-list history with contract fields, logout and idempotent logout, forged/expired token,
+valid scan with every documented field including `attendance_action`, duplicate 409 keeping the
+original record, expired QR, malformed QR, wrong campus, poor accuracy, missing GPS, inactive
+session, static assets under `/student/`, and a pinned-clock scenario for **09:05 present**,
+**09:10 exactly at cutoff late**, **09:11 late**.
+
+`tests/ui-test.js` runs 68 checks in Chromium with a fake camera and mocked geolocation: login
+screen and enrollment notice, invalid login, login, session restore after refresh, dashboard
+stats, history rendering and month filtering including the empty month, successful scan into
+the confirmation card, duplicate keeping the original record, expired QR, malformed QR, wrong
+campus, GPS denied, scan locking and retry, logout and 401 handling, three viewports with no
+horizontal overflow, assets under `/student/`, the dev kiosk rendering and refreshing, and
+backend status vocabulary. Screenshots land in `tests/screenshots/`; committed copies are in
+[`docs/screenshots/`](docs/screenshots).
+
+**These are mock tests.** They prove the frontend honours the documented contract and handles
+each response shape; they do not prove behaviour against Engineer B's backend. See section 15
+for the blocked live tests.
+
+The suites accept `BASE_URL` and `CHROME_PATH` environment variables, so the same browser suite
+can be pointed at a deployed student portal once the backend is reachable.
 
 ## 15. Current limitations and outstanding work
 
@@ -306,7 +348,11 @@ Known frontend limitations:
 
 - Logout cannot revoke a Django token; the 12-hour server-side expiry is the real control.
 - Camera and geolocation require HTTPS (or `localhost`); a plain-HTTP LAN address will fail.
-- The kiosk test page loads its QR library from a CDN, so it needs internet.
+- The kiosk test page uses the vendored `vendor/qrcode.min.js`, so it draws a code with no
+  internet access. (The previous version loaded its library from a CDN and silently rendered a
+  blank square on networks that block jsdelivr.)
+- `attendance_action` is displayed but its value list is still unpublished by Engineer B.
+- Live integration tests remain blocked; see above.
 
 ## 16. Integration responsibilities
 
@@ -342,3 +388,9 @@ Known frontend limitations:
   `/student/attendance-history/`, `/attendance/scan/` with GPS, backend-driven statuses and
   error codes, month filtering, `/student/` hosting support, `HOSTING.md`, contract rewrite,
   and `server.py` repurposed as a mock of the Django contract.
+- **19 Nov 2026 (review round 1)** — dev kiosk repaired (stray script before `<!DOCTYPE>`
+  removed, `payload` field aligned with `server.py`, WAT clock fixed, QR library vendored so
+  the code draws offline), `attendance_action` surfaced, status vocabulary aligned to
+  `present`/`late`/`absent`, and reproducible suites added: `tests/api-test.py` (48 checks)
+  and `tests/ui-test.js` (68 checks) with `tests/README.md` and npm scripts. `HOSTING.md`
+  rewritten around `{% static %}` so assets resolve from `/student/`.

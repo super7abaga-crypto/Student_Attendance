@@ -33,6 +33,7 @@ import json
 import math
 import mimetypes
 import os
+import pathlib
 import re
 import secrets
 import threading
@@ -43,7 +44,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
-DATA_FILE = ROOT / "dev" / ".data.json"
+DATA_FILE = pathlib.Path(os.environ.get("DATA_FILE") or (ROOT / "dev" / ".data.json"))
 
 PORT = int(os.environ.get("PORT", "8000"))
 HOST = os.environ.get("HOST", "127.0.0.1")
@@ -52,7 +53,8 @@ APP_SECRET = os.environ.get("APP_SECRET") or secrets.token_hex(32)
 QR_SECRET = os.environ.get("QR_SECRET") or secrets.token_hex(32)
 
 TOKEN_TTL_MS = 12 * 60 * 60 * 1000          # 12 hours, per contract
-QR_TTL_SECONDS = 30                          # QR tokens expire after 30 seconds
+QR_TTL_SECONDS = 30   # QR tokens expire after 30 seconds
+MOCK_ATTENDANCE_ACTION = os.environ.get("MOCK_ATTENDANCE_ACTION", "checked_in")  # mock-only, see API_CONTRACT.md
 
 WAT_OFFSET_MIN = 60                          # Africa/Lagos is UTC+1 all year
 SESSIONS = {
@@ -85,8 +87,20 @@ def iso_ms(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
 
+# DEV/TEST ONLY: pin the mock's WAT clock (e.g. MOCK_NOW_WAT=09:10) so cutoff behaviour
+# can be tested deterministically. Never set this outside local testing.
+MOCK_NOW_WAT = os.environ.get("MOCK_NOW_WAT", "").strip()
+
+
 def wat_now() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(minutes=WAT_OFFSET_MIN)
+    real = datetime.now(timezone.utc) + timedelta(minutes=WAT_OFFSET_MIN)
+    if not MOCK_NOW_WAT:
+        return real
+    try:
+        hour, minute = (int(part) for part in MOCK_NOW_WAT.split(":")[:2])
+    except ValueError:
+        return real
+    return real.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
 def wat_parts(dt: datetime | None = None) -> dict:
@@ -190,6 +204,7 @@ def record_view(row: dict) -> dict:
         "scanned_at": row["scanned_at"],
         "scan_time_wat": row["scan_time_wat"],
         "status": row["status"],
+        "attendance_action": row.get("attendance_action", MOCK_ATTENDANCE_ACTION),
     }
 
 
@@ -213,8 +228,8 @@ def seed() -> None:
     today = datetime.strptime(wat_parts()["date"], "%Y-%m-%d")
     for offset, session_type, status, time_wat in (
         (1, "morning", "late", "09:14:22"),
-        (2, "morning", "on_time", "09:03:10"),
-        (3, "afternoon", "on_time", "13:02:47"),
+        (2, "morning", "present", "09:03:10"),
+        (3, "afternoon", "present", "13:02:47"),
     ):
         scan_date = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
         if scan_date[:7] != wat_parts()["month"]:
@@ -258,10 +273,15 @@ def issue_qr(session_type: str | None = None) -> dict:
 
 
 def active_session() -> str:
+    """The session a mentor kiosk would be showing: the one open right now,
+    otherwise the next one due today."""
     minutes = wat_parts()["minutes"]
     order = ["morning", "afternoon", "evening"]
     for key in order:
-        if minutes < SESSIONS[key]["cutoff"]:
+        if SESSIONS[key]["start"] <= minutes < SESSIONS[key]["start"] + SESSION_OPEN_MINUTES:
+            return key
+    for key in order:
+        if minutes < SESSIONS[key]["start"]:
             return key
     return "evening"
 
@@ -479,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
                 })
 
             # Exactly at the cutoff counts as late, per the current contract.
-            status = "late" if parts["minutes"] >= SESSIONS[session_type]["cutoff"] else "on_time"
+            status = "late" if parts["minutes"] >= SESSIONS[session_type]["cutoff"] else "present"
             row = {
                 "id": str(uuid.uuid4()),
                 "student_id": student["id"],
@@ -490,6 +510,9 @@ class Handler(BaseHTTPRequestHandler):
                 "scanned_at": iso_ms(datetime.now(timezone.utc)),
                 "scan_time_wat": parts["time"],
                 "status": status,
+                # MOCK ONLY placeholder. Engineer B's contract owns this enum; the
+                # frontend renders whatever arrives and never branches on it.
+                "attendance_action": MOCK_ATTENDANCE_ACTION,
                 "campus": student.get("campus", CAMPUS["name"]),
                 "session_id": session_id,
                 "accuracy": accuracy,

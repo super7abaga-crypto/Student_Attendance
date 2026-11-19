@@ -1,112 +1,192 @@
-# Hosting the student portal at `/student/` — Django handoff
+# Serving the student portal from Django at `/student/`
 
-This document is for **Engineer B**. Nothing here changes the Django project; it only
-describes what the student portal needs in order to be served correctly at `/student/`,
-alongside the mentor portal at `/`.
+Engineer B owns the Django project. This document is the handoff: the exact files, routing
+and static settings needed to serve this portal at `https://<host>/student/`, with the mentor
+portal left untouched at `/`. Nothing here modifies Engineer B's project; every snippet is an
+instruction for that team to apply.
 
-## What the portal is
+The portal itself is plain HTML, CSS and JavaScript with no build step. All of its asset
+references are relative (`styles.css`, `app.js`, `vendor/...`, `assets/...`), so it works when
+served from any path, including `/student/`.
 
-A static bundle: one HTML page, one CSS file, one JS file, a vendored scanner library, a
-logo set and a favicon. No build step, no npm, no server-side rendering.
+---
 
-```
-index.html
-styles.css
-app.js
-favicon.png
-assets/learn2earn-logo.svg
-assets/learn2earn-mark.png
-vendor/html5-qrcode.min.js
-```
+## 1. Files this repository contributes
 
-`server.py`, `dev/` and `docs/` are development-only and should not be deployed.
+| File / folder | Purpose | Where it goes in Django |
+|---|---|---|
+| `index.html` | Portal markup (single page) | `templates/student/index.html`, with the static tags from §3 |
+| `styles.css` | All styling, responsive breakpoints | `static/student/styles.css` |
+| `app.js` | Auth, scan, history, all API calls | `static/student/app.js` |
+| `vendor/html5-qrcode.min.js` | Camera scanner, vendored (no CDN needed) | `static/student/vendor/html5-qrcode.min.js` |
+| `vendor/qrcode.min.js` | Dev kiosk only, not used by the portal | `static/student/vendor/qrcode.min.js` (optional) |
+| `assets/learn2earn-logo.svg` | Sidebar and sign-in logo | `static/student/assets/learn2earn-logo.svg` |
+| `assets/learn2earn-mark.png` | Square mark | `static/student/assets/learn2earn-mark.png` |
+| `favicon.png` | Browser icon | `static/student/favicon.png` |
+| `server.py`, `dev/kiosk.html` | **Local mock only, never deploy** | not deployed |
 
-## Why the paths already work
+`dev/kiosk.html` exists so the portal can be demonstrated offline. Engineer B's mentor kiosk
+issues the real QR codes and is the only QR issuer in production.
 
-Every asset reference in `index.html` is **relative** (`styles.css`, `app.js`,
-`vendor/…`, `assets/…`, `favicon.png`). There is no leading `/`, so the same files resolve
-correctly at `/`, `/student/` and any other prefix. Keep them relative; do not rewrite them
-to absolute paths.
+---
 
-The API base URL is resolved at runtime to `<page origin>/api/v1`, so a page served from
-`https://<host>/student/` calls `https://<host>/api/v1/` with no configuration. To point a
-deployment somewhere else, set the `learn2earn-api-base` meta tag in `index.html` or define
-`window.LEARN2EARN_API_BASE` before `app.js` loads.
+## 2. URLs
 
-## Option A — Django template + static files (recommended)
+Add one route, next to the existing mentor routes. Do not change the mentor routes.
 
-1. Copy `index.html` to `templates/student/index.html`.
-2. Copy the rest of the bundle into your static directory, for example:
+```python
+# student_portal/urls.py  (or wherever the project URLconf lives)
+from django.urls import path
+from django.views.generic import TemplateView
 
-   ```
-   static/student/styles.css
-   static/student/app.js
-   static/student/favicon.png
-   static/student/assets/learn2earn-logo.svg
-   static/student/assets/learn2earn-mark.png
-   static/student/vendor/html5-qrcode.min.js
-   ```
+urlpatterns = [
+    # ... existing mentor portal and API routes stay exactly as they are ...
 
-3. Because the template now lives one level deeper than the static root, point the relative
-   references at the static prefix, keeping them relative to `/student/`:
-
-   ```html
-   <link rel="stylesheet" href="static/student/styles.css">
-   <script src="static/student/vendor/html5-qrcode.min.js"></script>
-   <script defer src="static/student/app.js"></script>
-   <link rel="icon" href="static/student/favicon.png">
-   <img src="static/student/assets/learn2earn-logo.svg" alt="Learn2Earn">
-   ```
-
-   If you prefer `{% static %}`, use `{% static 'student/styles.css' %}` etc. Either way the
-   URLs must resolve under `/student/`.
-
-4. Route it:
-
-   ```python
-   # urls.py
-   from django.views.generic import TemplateView
-
-   urlpatterns += [
-       path("student/", TemplateView.as_view(template_name="student/index.html"), name="student-portal"),
-   ]
-   ```
-
-5. Make sure `STATIC_URL` is reachable in production (`collectstatic` + your web server or
-   WhiteNoise). The portal requests no other files.
-
-## Option B — serve the bundle as static files only
-
-Keep the bundle intact in `static/student/` (including `index.html`) and let the web server
-return it:
-
-```nginx
-location = /student { return 301 /student/; }
-location /student/ {
-    alias /srv/app/static/student/;
-    try_files $uri $uri/ /student/index.html;
-}
+    # Student portal, served at /student/ with no trailing template conflicts.
+    path("student/", TemplateView.as_view(template_name="student/index.html"), name="student-portal"),
+]
 ```
 
-With this option the relative references in `index.html` work unchanged.
+The page needs no context and no authentication at the Django level: the portal signs the
+student in against `POST /api/v1/auth/student/login/` and holds the token in `sessionStorage`.
 
-## Requirements checklist
+Because `app.js` derives the API base from the page's own origin, serving the page at
+`/student/` on the same host makes it call `/api/v1/...` automatically. No configuration is
+needed for production. For a split deployment, set the override in §5.
 
-- [ ] `GET /student/` returns the portal HTML with `Content-Type: text/html`.
-- [ ] `styles.css`, `app.js`, `favicon.png`, `assets/*`, `vendor/html5-qrcode.min.js` all return `200`.
-- [ ] `GET /api/v1/student/attendance-history/` works from the portal origin (same origin needs no CORS).
-- [ ] `POST /api/v1/auth/student/login/` and `POST /api/v1/attendance/scan/` are reachable.
-- [ ] HTTPS in production: camera and geolocation are blocked on plain HTTP except on `localhost`.
-- [ ] The mentor portal stays at `/` and the student portal at `/student/`; they share the API only.
-- [ ] `404`/`500` handling does not swallow `/student/` (avoid a catch-all SPA route in front of it).
+---
 
-## Local check before deploying
+## 3. Template with `{% static %}`
+
+Copy `index.html` to `templates/student/index.html`, then make five edits. The result:
+
+```django
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#052c6b">
+  <title>LEARN 2EARN · Student Attendance Portal</title>
+  <link rel="icon" href="{% static 'student/favicon.png' %}" type="image/png">
+  <link rel="stylesheet" href="{% static 'student/styles.css' %}">
+  <script src="{% static 'student/vendor/html5-qrcode.min.js' %}"></script>
+  <script defer src="{% static 'student/app.js' %}"></script>
+</head>
+<body>
+  ...
+        <img class="brand-logo" src="{% static 'student/assets/learn2earn-logo.svg' %}" alt="Learn2Earn">
+  ...
+        <div class="auth-brand"><img class="brand-logo" src="{% static 'student/assets/learn2earn-logo.svg' %}" alt="Learn2Earn"></div>
+  ...
+</body>
+</html>
+```
+
+That is the complete list of asset references: `favicon.png`, `styles.css`,
+`vendor/html5-qrcode.min.js`, `app.js`, and `assets/learn2earn-logo.svg` twice. Delete the
+`document.write` CDN fallback block that follows the scanner `<script>` tag; the library is
+vendored, so the fallback only adds a network dependency.
+
+One-line conversion, if it is easier than hand-editing:
 
 ```bash
-python server.py
-# portal:  http://127.0.0.1:8000/student/
-# api:     http://127.0.0.1:8000/api/v1/
+sed -i \
+  -e "s|href=\"favicon.png\"|href=\"{% static 'student/favicon.png' %}\"|" \
+  -e "s|href=\"styles.css\"|href=\"{% static 'student/styles.css' %}\"|" \
+  -e "s|src=\"vendor/html5-qrcode.min.js\"|src=\"{% static 'student/vendor/html5-qrcode.min.js' %}\"|" \
+  -e "s|src=\"app.js\"|src=\"{% static 'student/app.js' %}\"|" \
+  -e "s|src=\"assets/learn2earn-logo.svg\"|src=\"{% static 'student/assets/learn2earn-logo.svg' %}\"|g" \
+  templates/student/index.html
+sed -i '1i {% load static %}' templates/student/index.html
 ```
 
-The local mock serves the bundle under `/student/` with exactly the same relative paths, so
-a page that works there will work under Django with the mapping above.
+With `STATIC_URL = "/static/"`, the browser requests `/static/student/styles.css`, which
+resolves correctly no matter which path the page itself is served from. Using `{% static %}`
+is preferred over relative paths because it keeps working if the portal later moves to a CDN
+or a versioned static prefix.
+
+---
+
+## 4. Settings
+
+```python
+# settings.py
+STATIC_URL = "/static/"
+
+STATICFILES_DIRS = [
+    BASE_DIR / "static",          # holds static/student/... from this repository
+]
+
+# collectstatic target for production (WhiteNoise, S3, nginx, whatever you already use)
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [BASE_DIR / "templates"],
+        "APP_DIRS": True,
+        # ... existing options unchanged ...
+    },
+]
+```
+
+If the project already has `STATIC_URL`, `STATICFILES_DIRS` and `TEMPLATES["DIRS"]`, only add
+the `student/` folder to them. Do not change `STATIC_URL` for this integration.
+
+---
+
+## 5. Optional: split API host
+
+If the portal and the API end up on different hosts, set the base URL in one place. Either the
+meta tag in `templates/student/index.html`:
+
+```django
+<meta name="learn2earn-api-base" content="https://api.example.com/api/v1">
+```
+
+or a global before `app.js` loads:
+
+```django
+<script>window.LEARN2EARN_API_BASE = "https://api.example.com/api/v1";</script>
+```
+
+When set, the backend must allow the portal's origin in CORS and accept the `Authorization`
+header. Both defaults (same origin, and the production host for `file://`) need no edit.
+
+---
+
+## 6. Alternative for local development only
+
+If a developer wants to look at the portal without touching templates, serve the folder
+straight from Django's development static view. This is **not** for production: it bypasses
+`collectstatic` and caching.
+
+```python
+from django.urls import re_path
+from django.views.static import serve
+
+urlpatterns += [
+    re_path(r"^student/(?P<path>.*)$", serve, {"document_root": BASE_DIR / "student-portal"}),
+]
+```
+
+Here the whole repository folder sits at `student-portal/` and the page is reached at
+`/student/index.html`. Relative asset paths resolve under `/student/`, so no template edits are
+needed. For anything beyond local use, follow §2 to §4.
+
+---
+
+## 7. Post-deploy checklist for Engineer B
+
+1. `https://<host>/student/` returns the portal, not the mentor portal and not a 404.
+2. Browser devtools show `styles.css`, `app.js`, `vendor/html5-qrcode.min.js` and the logo all
+   loading `200` from `/static/student/...`.
+3. Sign-in reaches `POST /api/v1/auth/student/login/` and returns `{token, student}`.
+4. `Authorization: Token <token>` (never `Bearer`) is sent on `/student/attendance-history/`
+   and `/attendance/scan/`.
+5. `GET /api/v1/student/attendance-history/` returns a bare JSON list.
+6. Camera scanning works over HTTPS on a phone (a plain-HTTP LAN address will block
+   `getUserMedia`).
+7. The mentor portal at `/` is unchanged.

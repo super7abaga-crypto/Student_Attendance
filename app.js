@@ -670,6 +670,13 @@ function showConfirmation(attendance, { duplicate = false } = {}) {
   $("confirmDate").textContent = attendance.attendance_date ? dateLabel(attendance) : "—";
   $("confirmTime").textContent = timeLabel(attendance);
 
+  // attendance_action is returned by the backend; we display it verbatim and never
+  // branch on its value (Engineer B owns the enum).
+  const rawAction = String(attendance.attendance_action || "").trim();
+  $("confirmActionRow").classList.toggle("hidden", !rawAction);
+  $("confirmAction").textContent = rawAction || "—";
+  $("confirmAction").dataset.action = rawAction;
+
   const statusEl = $("confirmStatus");
   statusEl.dataset.status = rawStatus;
   statusEl.textContent = rawStatus ? statusLabel(rawStatus).toUpperCase() : "RECORDED";

@@ -99,14 +99,30 @@ regardless of the response.
     "attendance_date": "2026-11-19",
     "scanned_at": "2026-11-19T08:04:12.000Z",
     "scan_time_wat": "09:04:12",
-    "status": "late"
+    "status": "late",
+    "attendance_action": "checked_in"
   }
 }
 ```
 
-`status` is displayed exactly as returned (`on_time` → "On Time", `late` → "Late",
-`present` → "Present", `absent` → "Absent"; any other value is shown verbatim). The raw
-value is always kept in `data-status` on the badge. The device clock is never used.
+**Response fields the portal reads.** `full_name`, `username`, `session_type`,
+`attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `attendance_action`.
+
+`status` is rendered from the backend value only; the portal never computes it and never
+compares the device clock with a cutoff. Known spellings are humanised for the badge
+(`present` → "Present", `late` → "Late", `absent` → "Absent", legacy `on_time` → "On Time");
+any other string is shown verbatim. The raw value is always kept in `data-status`, so a
+change of vocabulary on the backend never breaks the portal.
+
+`attendance_action` is shown verbatim in the confirmation card's "BACKEND ACTION" row and
+kept in `data-action`. The portal does not branch on its value: the duplicate path is driven
+by HTTP 409 and `code: duplicate_attendance`, not by this field.
+
+> **Open item for Engineer B.** The enum behind `attendance_action` is not documented in the
+> assignment, and this repository must not invent backend vocabulary. The local mock emits
+> `checked_in` (configurable with `MOCK_ATTENDANCE_ACTION`) purely so the field can be seen
+> and tested. Please publish the authoritative value list; the frontend already renders any
+> string unchanged, so no code change will be needed to adopt it.
 
 Error codes the portal maps to student-readable messages:
 
@@ -118,6 +134,10 @@ Error codes the portal maps to student-readable messages:
 | 403 | `wrong_campus` | Outside the campus geofence |
 | 403 | `session_inactive` | No open session for that QR |
 | 403 | `gps_accuracy` | Location too imprecise |
+
+Cutoffs, the status enum and duplicate protection are Engineer B's. Current documented
+defaults are morning 09:10, afternoon 13:10, evening 17:10, with a scan exactly at the
+cutoff counted as Late. The portal displays whatever status the backend returns.
 | 400 | `gps_required` | No coordinates supplied |
 | 401 | — | Token missing, expired or revoked |
 
