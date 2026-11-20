@@ -65,11 +65,11 @@ class Command(BaseCommand):
                     scanned=timezone.make_aware(naive,ZoneInfo(campus.timezone))
                     session=str(item.get("session_type", "" )).lower()
                     if session not in ("morning","afternoon","evening"): raise ValueError("invalid session_type")
-                    status_map={"on time":AttendanceLog.Status.ON_TIME,"on_time":AttendanceLog.Status.ON_TIME,"late":AttendanceLog.Status.LATE,"absent":AttendanceLog.Status.ABSENT}
+                    status_map={"on time":AttendanceLog.Status.PRESENT,"on_time":AttendanceLog.Status.PRESENT,"present":AttendanceLog.Status.PRESENT,"late":AttendanceLog.Status.LATE,"absent":AttendanceLog.Status.ABSENT}
                     attendance_status=status_map.get(str(item.get("status","")).lower())
                     if not attendance_status: raise ValueError("invalid status")
-                    if AttendanceLog.objects.filter(student=student,attendance_date=day,session_type=session).exists(): duplicates+=1; continue
-                    AttendanceLog.objects.create(student=student,campus=campus,track_name=track.name if track else "",cohort_name="",session_type=session,attendance_action="check_out" if session=="evening" else "check_in",attendance_date=day,scanned_at=scanned,status=attendance_status,source=AttendanceLog.Source.QR,location_verified=False,location_result="legacy_unverified")
+                    if AttendanceLog.objects.filter(student=student,attendance_date=day).exists(): duplicates+=1; continue
+                    AttendanceLog.objects.create(student=student,campus=campus,track_name=track.name if track else "",cohort_name="",session_type=session,attendance_action="check_in",attendance_date=day,scanned_at=scanned,status=attendance_status,source=AttendanceLog.Source.QR,location_verified=False,location_result="legacy_unverified")
                     logs_created+=1
                 except Exception as exc:
                     warnings+=1; self.stderr.write(f"Skipped invalid attendance row: {exc}")

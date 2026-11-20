@@ -82,7 +82,10 @@ CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/
 CELERY_TASK_ALWAYS_EAGER = os.environ.get("CELERY_TASK_ALWAYS_EAGER", "0") == "1"
 from celery.schedules import crontab
 CELERY_TIMEZONE = "Africa/Lagos"
-CELERY_BEAT_SCHEDULE = {"monthly-attendance-close": {"task": "apps.core.tasks.close_missed_months", "schedule": crontab(day_of_month="1", hour=0, minute=15)}}
+CELERY_BEAT_SCHEDULE = {
+    "daily-attendance-close": {"task": "apps.core.tasks.close_daily_attendance", "schedule": crontab(hour=20, minute=1)},
+    "monthly-attendance-close": {"task": "apps.core.tasks.close_missed_months", "schedule": crontab(day_of_month="1", hour=0, minute=15)},
+}
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "attendance@learn2earn.ng")
 LOGGING = {"version": 1, "disable_existing_loggers": False, "handlers": {"console": {"class": "logging.StreamHandler"}}, "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")}}
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": "learn2earn-local"}}

@@ -18,14 +18,14 @@ python manage.py collectstatic --noinput
 gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60
 ```
 
-Run background processes separately:
+Run background processes separately. Celery Beat records daily Absences at 20:01 Africa/Lagos and closes monthly reports at 00:15 on the first day of a month:
 
 ```sh
 celery -A config worker --loglevel=INFO
 celery -A config beat --loglevel=INFO
 ```
 
-Celery Beat closes previous reporting periods at 00:15 Africa/Lagos on the first day of each month and processes missing prior months in order. Reports are unique per campus/year/month; source attendance is never deleted. A manual close is available for completed periods only. Reopening a report never erases its audit trail.
+Celery Beat records daily Absences at 20:01 Africa/Lagos after the evening window closes. It closes previous reporting periods at 00:15 Africa/Lagos on the first day of each month and processes missing prior months in order. Reports are unique per campus/year/month; source attendance is never deleted. A manual close is available for completed periods only. Reopening a report never erases its audit trail.
 
 The reverse proxy must redirect HTTP to HTTPS and pass `X-Forwarded-Proto: https`. Health check is `GET /health/`. Swagger is available at `/api/v1/docs/`; protect or disable public schema routes if deployment policy requires it.
 

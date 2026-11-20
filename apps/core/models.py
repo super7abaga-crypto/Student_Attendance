@@ -170,7 +170,7 @@ class QRToken(models.Model):
 
 class AttendanceLog(models.Model):
     class Status(models.TextChoices):
-        ON_TIME = "on_time", "On Time"
+        PRESENT = "present", "Present"
         LATE = "late", "Late"
         ABSENT = "absent", "Absent"
 
@@ -200,8 +200,8 @@ class AttendanceLog(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["student", "attendance_date", "session_type"], name="uniq_student_date_session_attendance")]
-        indexes = [models.Index(fields=["campus", "attendance_date", "session_type"]), models.Index(fields=["campus", "status", "attendance_date"])]
+        constraints = [models.UniqueConstraint(fields=["student", "attendance_date"], name="uniq_student_date_attendance")]
+        indexes = [models.Index(fields=["campus", "attendance_date"]), models.Index(fields=["campus", "status", "attendance_date"])]
         ordering = ["-scanned_at", "student__user__username"]
 
     @property

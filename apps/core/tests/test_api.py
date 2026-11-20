@@ -31,7 +31,7 @@ class AttendanceAPITests(TestCase):
             response=self.client.post("/api/v1/attendance/scan/",{"username":"someone-else","qr_payload":qr_payload,"latitude":6.5244,"longitude":3.3792,"accuracy":10},format="json")
         self.assertEqual(response.status_code,201)
         self.assertEqual(response.data["attendance"]["username"],"ada")
-        self.assertEqual(response.data["attendance"]["status"],"on_time")
+        self.assertEqual(response.data["attendance"]["status"],"present")
 
     def test_scan_errors_have_stable_codes_for_the_student_portal(self):
         at=timezone.make_aware(datetime.combine(timezone.localdate(),time(9,5)),ZoneInfo("Africa/Lagos"))

@@ -18,7 +18,7 @@ from .models import (AttendanceAdjustment, AttendanceLog, AuditLog, Campus, Mont
 DEFAULT_SCHEDULES = {
     "morning": (time(9, 0), time(9, 10), time(12, 0), "check_in"),
     "afternoon": (time(13, 0), time(13, 10), time(16, 0), "check_in"),
-    "evening": (time(17, 0), time(17, 10), time(20, 0), "check_out"),
+    "evening": (time(17, 0), time(17, 10), time(20, 0), "check_in"),
 }
 LOCATION_DENIED = "Attendance denied. You must be physically present within your assigned Learn2Earn campus to scan."
 QR_SALT = "learn2earn.attendance.qr.v1"
@@ -184,7 +184,9 @@ def record_scan(*, student, token, latitude, longitude, accuracy, at=None, reque
         raise ScanLocationError(code,result=location_result,accuracy=accuracy,distance=distance)
     schedule = schedule_for(student.campus, run.session_type)
     local_now = timezone.localtime(now, timezone=ZoneInfo(student.campus.timezone))
-    status = AttendanceLog.Status.ON_TIME if local_now.timetz().replace(tzinfo=None) < schedule.late_after else AttendanceLog.Status.LATE
+    # The cutoff minute is inclusive: 09:10, 13:10 and 17:10 are Present;
+    # 09:11, 13:11 and 17:11 onward are Late.
+    status = AttendanceLog.Status.PRESENT if local_now.timetz().replace(tzinfo=None) <= schedule.late_after else AttendanceLog.Status.LATE
     try:
         with transaction.atomic():
             log = AttendanceLog.objects.create(student=student, campus=student.campus,
@@ -194,45 +196,61 @@ def record_scan(*, student, token, latitude, longitude, accuracy, at=None, reque
                 latitude=latitude, longitude=longitude, location_accuracy_m=accuracy, location_distance_m=distance,
                 location_checked_at=now, location_result=location_result, session_run=run)
     except IntegrityError as exc:
-        raise FileExistsError("Already recorded for this campus session.") from exc
+        raise FileExistsError("Attendance has already been recorded for today.") from exc
     audit(student.user, "attendance.scan", campus=student.campus, obj=log,
           details={"status": status, "session_type": run.session_type, "source": "qr"}, request=request)
     return log
 
 
+def attendance_day_closed(campus, day, now=None):
+    """A daily absence becomes final after the last approved attendance window."""
+    now = now or timezone.now()
+    local_now = timezone.localtime(now, timezone=ZoneInfo(campus.timezone))
+    final_close = schedule_for(campus, "evening").close_time
+    return day < local_now.date() or (day == local_now.date() and local_now.timetz().replace(tzinfo=None) >= final_close)
+
+
+def materialize_absences(campus, day, now=None):
+    """Persist one Absent record for enrolled students with no daily attendance."""
+    if not attendance_day_closed(campus, day, now):
+        return 0
+    students = Student.objects.filter(campus=campus, active=True, user__is_active=True, registration_date__lte=day)
+    existing = set(AttendanceLog.objects.filter(campus=campus, attendance_date=day).values_list("student_id", flat=True))
+    missing = [student for student in students if student.pk not in existing]
+    if not missing:
+        return 0
+    AttendanceLog.objects.bulk_create([
+        AttendanceLog(student=student, campus=campus,
+            track_name=student.track.name if student.track_id else "",
+            cohort_name=student.cohort.name if student.cohort_id else "",
+            session_type="evening", attendance_action="check_in", attendance_date=day,
+            status=AttendanceLog.Status.ABSENT, source=AttendanceLog.Source.MANUAL,
+            location_verified=False, location_result="system_daily_absence")
+        for student in missing
+    ], ignore_conflicts=True)
+    return len(missing)
+
+
 def attended_sessions(campus, day, now=None):
-    now = now or timezone.now(); local_now = timezone.localtime(now, timezone=ZoneInfo(campus.timezone))
-    done = []
-    for session_type in DEFAULT_SCHEDULES:
-        schedule = schedule_for(campus, session_type)
-        if day < local_now.date() or (day == local_now.date() and local_now.timetz().replace(tzinfo=None) >= schedule.close_time):
-            done.append(session_type)
-    return done
+    # Compatibility field for the mentor response. Daily attendance has one close point.
+    return ["daily"] if attendance_day_closed(campus, day, now) else []
 
 
 def summary_for(campus, day, now=None):
-    now = now or timezone.now(); students = Student.objects.filter(campus=campus, active=True, user__is_active=True)
-    total = students.count(); completed = attended_sessions(campus, day, now)
+    now = now or timezone.now(); materialize_absences(campus, day, now)
+    students = Student.objects.filter(campus=campus, active=True, user__is_active=True, registration_date__lte=day)
+    total = students.count(); closed = attendance_day_closed(campus, day, now)
     logs = AttendanceLog.objects.filter(campus=campus, attendance_date=day)
-    present = logs.exclude(status=AttendanceLog.Status.ABSENT).count()
+    present = logs.filter(status__in=[AttendanceLog.Status.PRESENT, AttendanceLog.Status.LATE]).count()
     late = logs.filter(status=AttendanceLog.Status.LATE).count()
-    missing = sum(max(0, students.exclude(attendance_logs__attendance_date=day, attendance_logs__session_type=s).distinct().count()) for s in completed)
-    explicitly_absent = logs.filter(status=AttendanceLog.Status.ABSENT, session_type__in=completed).count()
-    missed = missing + explicitly_absent
-    morning = logs.filter(session_type="morning").exclude(status="absent").count()
-    afternoon = logs.filter(session_type="afternoon").exclude(status="absent").count()
-    evening = logs.filter(session_type="evening").exclude(status="absent").count()
-    checked_out_missing = 0
-    if "evening" in completed:
-        checked_out_missing = students.exclude(attendance_logs__attendance_date=day, attendance_logs__session_type="evening").distinct().count()
-    expected = total * len(completed)
-    completed_present = logs.filter(session_type__in=completed).exclude(status=AttendanceLog.Status.ABSENT).count()
+    missed = logs.filter(status=AttendanceLog.Status.ABSENT).count()
+    expected = total if closed else 0
     return {"active_students": total, "present": present, "late": late,
-        "on_time": logs.filter(status=AttendanceLog.Status.ON_TIME).count(),
-        "absent": missed, "not_checked_out": checked_out_missing,
-        "attendance_percentage": round((completed_present / expected) * 100, 1) if expected else None,
-        "completed_sessions": completed, "morning_check_ins": morning,
-        "afternoon_check_ins": afternoon, "evening_check_outs": evening}
+        "on_time": logs.filter(status=AttendanceLog.Status.PRESENT).count(),
+        "absent": missed, "not_checked_out": 0,
+        "attendance_percentage": round((present / expected) * 100, 1) if expected else None,
+        "completed_sessions": ["daily"] if closed else [], "morning_check_ins": logs.filter(session_type="morning").exclude(status="absent").count(),
+        "afternoon_check_ins": logs.filter(session_type="afternoon").exclude(status="absent").count(), "evening_check_outs": logs.filter(session_type="evening").exclude(status="absent").count()}
 
 
 def csv_safe(value):
@@ -243,7 +261,11 @@ def csv_safe(value):
 def report_for(campus, year, month, actor=None):
     start = datetime(year, month, 1, tzinfo=timezone.get_current_timezone())
     end = datetime(year + (month == 12), 1 if month == 12 else month + 1, 1, tzinfo=timezone.get_current_timezone())
-    logs = AttendanceLog.objects.filter(campus=campus, attendance_date__gte=start.date(), attendance_date__lt=end.date()).select_related("student__user").order_by("attendance_date", "session_type", "student__user__username")
+    day = start.date()
+    while day < end.date():
+        materialize_absences(campus, day)
+        day += timedelta(days=1)
+    logs = AttendanceLog.objects.filter(campus=campus, attendance_date__gte=start.date(), attendance_date__lt=end.date()).select_related("student__user").order_by("attendance_date", "student__user__username")
     output = io.StringIO(); writer = csv.writer(output)
     writer.writerow(["full_name", "username", "student_id", "campus", "track", "cohort", "session_type", "attendance_action", "attendance_date", "scan_time_wat", "status", "source", "location_verified"])
     rows = []
