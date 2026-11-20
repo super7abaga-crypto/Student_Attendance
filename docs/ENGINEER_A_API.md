@@ -1,18 +1,48 @@
-# Engineer A API integration
+# Engineer A ↔ Engineer B API contract
 
-Base URL: `https://fellowship.learn2earn.ng/api/v1/` in production. The mentor portal uses Django sessions; student clients use a per-student DRF token. The scan API derives identity from the authenticated student and does not accept a username as proof of identity.
+Base URL: `https://<deployment-host>/api/v1/`. The student portal is `/student/`; the mentor portal is `/`.
 
-The student portal is served by Django at `/student/`; the mentor portal remains at `/`. Its HTML is a Django template, and its CSS, JavaScript, logo, and vendored camera scanner are collected from `static/student/`. Production releases must run `python manage.py collectstatic --noinput` so these assets are available under `/static/student/`.
+## Attendance rule
 
-## Student authentication and attendance
+One attendance record exists per student per Africa/Lagos calendar date. The database enforces `UNIQUE(student_id, attendance_date)`.
+
+Mentors open a QR window for `morning`, `afternoon`, or `evening`. The window tells clients when the student scanned; it does not create another daily record. A later successful scan on the same WAT date returns `409 duplicate_attendance`.
+
+| Window | Present through | Late from |
+|---|---:|---:|
+| Morning | 09:10 WAT, inclusive | 09:11 WAT |
+| Afternoon | 13:10 WAT, inclusive | 13:11 WAT |
+| Evening | 17:10 WAT, inclusive | 17:11 WAT |
+
+Status values are `present`, `late`, and `absent`. At 20:01 WAT, Celery Beat records `absent` for active students registered on or before that date who have no daily record. A summary or monthly report also materializes missing Absences after the evening window closes.
+
+## Authentication and access
+
+Students use `Authorization: Token <token>`. `POST auth/student/login/` creates a token that expires after 12 hours. Mentors use a Django session created by `POST auth/mentor/login/`; send the `csrftoken` cookie as `X-CSRFToken` on unsafe requests.
+
+Roles are `super_admin`, `campus_admin`, `mentor`, `attendance_officer`, and `student`. Campus membership is checked on the server. Attendance officers are read-only; mentors need the corresponding per-campus permission to manage students, correct attendance, or export data.
+
+## Student API
 
 ### `POST auth/student/login/`
 
-Request: `{ "username": "ada.okafor", "password": "…" }`. The server lowercases the username and removes spaces. Response includes `token` and the student profile. Student tokens expire after 12 hours; sign in again to renew. Send `Authorization: Token <token>` on student endpoints.
+Request: `{ "username": "ada.okafor", "password": "…" }`.
+
+Success: `200 { "success": true, "token": "…", "student": { "id", "full_name", "username", "campus", "campus_name" } }`.
+
+Failures: `401 invalid_credentials`; `403 student_inactive`.
+
+### `GET student/profile/`
+
+Requires a student token. Returns the authenticated student profile with campus, track, cohort, registration date, and active state. A non-student or inactive student receives `403`.
+
+### `GET student/attendance-history/`
+
+Requires a student token. Returns an array of at most 500 attendance objects, newest first. An object includes `id`, student identity, campus, `session_type`, `attendance_action`, `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `source`, and location-verification fields. Only the authenticated student’s records are returned.
 
 ### `POST attendance/scan/`
 
-Requires the student token. Request:
+Requires a student token. Send either `qr_token` or a QR-envelope string in `qr_payload`, plus `latitude`, `longitude`, and `accuracy`.
 
 ```json
 {
@@ -23,38 +53,49 @@ Requires the student token. Request:
 }
 ```
 
-The camera reads a JSON QR envelope `{ "version": 1, "token": "…", "expires_at": 1794908400 }`. Send that exact decoded string as `qr_payload`; the backend extracts and verifies the signed inner token. It includes the campus UUID, session, action, issue/expiry times, run UUID and random nonce. It expires after 30 seconds, including at the exact expiry second. A screenshot may be reused inside that 30 second window; geofence checks remain required. `qr_token` containing only the inner signed string is also accepted.
+Success is `201 { "success": true, "attendance": { … } }`. The server derives the student from the token and validates QR signature, 30-second expiry, active session, campus, GPS accuracy, and geofence.
 
-Successful response is HTTP 201 with `success: true` and an `attendance` object containing full name, username, assigned campus, `session_type`, `attendance_action` (`check_in`), `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, location verification and source. `session_type` shows the window that accepted the scan, but does not create another daily attendance record. `status` is `present`, `late`, or `absent`. A second scan for the same student and WAT calendar date returns HTTP 409 with `code: "duplicate_attendance"`. Scan failures use stable machine-readable codes: `invalid_qr`, `qr_expired`, `session_inactive`, `wrong_campus`, `gps_required`, `gps_accuracy`, `location_unconfigured`, and `student_inactive`. GPS accuracy and geofence distance are evaluated by the server.
+| HTTP | Code | Recovery |
+|---:|---|---|
+| 400 | `invalid_qr` | Scan a current Learn2Earn QR. |
+| 400 | `gps_required` | Send fresh location and accuracy. |
+| 403 | `qr_expired` | Wait for the kiosk refresh, then rescan. |
+| 403 | `session_inactive` | Ask the mentor to open the attendance window. |
+| 403 | `wrong_campus` | Scan inside the assigned campus geofence. |
+| 403 | `gps_accuracy` | Retry when GPS accuracy improves. |
+| 403 | `location_unconfigured` | QR scanning remains disabled until campus coordinates are configured. |
+| 403 | `student_inactive` | Contact a campus administrator. |
+| 409 | `duplicate_attendance` | Keep the existing daily record; do not retry in another window. |
 
-**Cutoff boundary:** Django records a scan through the configured cutoff minute as `present`: 9:10 AM, 1:10 PM, and 5:10 PM are each Present. A scan from 9:11 AM, 1:11 PM, or 5:11 PM in the matching attendance window is `late`. Active students without a daily record become `absent` after the evening window closes.
+### `POST auth/logout/`
 
-Other student endpoints:
+Deletes the student token or ends the mentor session and returns `200 { "success": true }`.
 
-- `POST auth/student/register/` — campus administrator only; student registration and campus assignment are controlled by Engineer B. This endpoint requires `username`, `password` (12+ characters), `full_name`, and `campus` UUID; student self-registration is not currently enabled.
-- `GET student/profile/`
-- `GET student/attendance-history/`
-- `POST auth/logout/`
+Student self-registration is disabled. `POST auth/student/register/` is a staff operation requiring authorised campus access.
 
 ## Mentor and administration API
 
-- `POST auth/mentor/login/` — individual username/password, establishes a Django session. Browser requests include the `csrftoken` cookie as `X-CSRFToken` for state changes.
-- `GET/PATCH auth/mentor/profile/`
-- `GET/POST admin/campuses/` — POST is super administrator only. Campus detail supports GET/PATCH with role checks.
-- `GET/POST admin/campuses/{campus_uuid}/schedules/` — schedule write is administrator only.
-- `GET admin/tracks/?campus_id=…`
-- `GET admin/students/?campus=…&search=…&active=true` — paginated; CSV upload is `POST admin/students/bulk_import/?campus_id=…`; export is `GET admin/students/export/?campus=…`.
-- `POST admin/students/{student_uuid}/deactivate/`, `/reactivate/`, `/transfer/` — transfer requires a reason and retains old attendance campus IDs.
-- `POST mentor/qr/start/` with `{ "campus_id": "…", "session_type": "morning" }`.
-- `GET mentor/qr/current/?campus_id=…&session_type=morning` — returns the signed QR envelope and protected PNG URL.
-- `POST mentor/qr/end/` with `{ "session_id": "…" }` — revokes live QR tokens.
-- `GET mentor/attendance/?campus_id=…&date=YYYY-MM-DD&session_type=…&status=late&track_name=…&cohort_name=…&source=qr&search=…` — paginated; add `format=csv` for a protected export.
-- `GET mentor/attendance/summary/?campus_id=…&date=YYYY-MM-DD`
-- `POST mentor/attendance/manual/` — attendance ID or student ID/session, new status and required reason.
-- `POST mentor/attendance/location-override/` — requires student, campus, session, reason and a matching recent failed location validation.
-- `GET admin/reports/?campus_id=…&date_from=…&date_to=…`
-- `GET admin/monthly-reports/?campus_id=…`; `POST admin/monthly-close/` with campus and optional completed year/month; CSV and JSON downloads are permission checked.
-- `POST admin/monthly-reports/{report_uuid}/reopen/` with a reason.
-- `POST auth/logout/`
+The endpoints below require a mentor session and relevant campus access unless noted.
 
-Roles: `super_admin`, `campus_admin`, `mentor`, and `attendance_officer`. Campus scope comes from server side memberships; students cannot select another campus. Read only officers cannot perform corrections. API schemas are published through `/api/v1/docs/` and `/api/v1/schema/`.
+- `POST auth/mentor/login/` — creates a session and returns `csrf_token`, `display_name`, and `role`.
+- `GET/PATCH auth/mentor/profile/` — reads or updates the authenticated mentor profile.
+- `GET/POST admin/campuses/`; `GET/PATCH admin/campuses/{campus_id}/` — list/detail; creation is super-admin only.
+- `GET/POST admin/campuses/{campus_id}/schedules/` — reads or updates campus QR windows; writes need administrator access.
+- `GET admin/tracks/?campus_id=<uuid>` — active tracks for an authorised campus.
+- `GET/PATCH admin/students/{id}/`; `GET admin/students/?campus=<uuid>` — scoped student roster.
+- `POST admin/students/bulk_import/?campus_id=<uuid>` — CSV import, maximum 2 MB / 5,000 rows.
+- `GET admin/students/export/?campus=<uuid>` — protected CSV roster export.
+- `POST admin/students/{id}/deactivate/`, `/reactivate/`, `/transfer/` — transfer needs a destination `campus_id` and reason.
+- `POST mentor/qr/start/` with `{ "campus_id": "…", "session_type": "morning" }` — opens a window only during its configured schedule.
+- `GET mentor/qr/current/?campus_id=<uuid>&session_type=morning` — current signed QR envelope, expiry, and protected PNG URL.
+- `GET mentor/qr/image/?token=<signed-token>` — no-store QR PNG for an authorised mentor.
+- `POST mentor/qr/end/` with `{ "session_id": "…" }` — closes the session and revokes QR tokens.
+- `GET mentor/attendance/?campus_id=<uuid>&date=YYYY-MM-DD&status=late&session_type=morning&format=csv` — paginated records or protected CSV. It materializes completed-day Absences before returning date-specific results.
+- `GET mentor/attendance/summary/?campus_id=<uuid>&date=YYYY-MM-DD` — `{ campus, date, timezone, summary }`; `summary` contains `active_students`, `present`, `on_time` (count with `present` status), `late`, `absent`, `attendance_percentage`, and dashboard window counts.
+- `POST mentor/attendance/manual/` — creates or corrects one daily record; a reason is mandatory. Absent cannot be created before the evening window closes.
+- `POST mentor/attendance/location-override/` — audited correction for a matching recent GPS rejection.
+- `GET admin/reports/?campus_id=<uuid>&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD` — aggregate report.
+- `GET admin/monthly-reports/?campus_id=<uuid>`; `POST admin/monthly-close/`; `POST admin/monthly-reports/{id}/reopen/` — monthly-report lifecycle.
+- `GET admin/reports/{id}/csv/` and `/json/` — protected monthly exports.
+
+Swagger and the generated schema are at `/api/v1/docs/` and `/api/v1/schema/`.

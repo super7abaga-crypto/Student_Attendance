@@ -1,20 +1,16 @@
 from django.db import migrations, models
+from django.db.models import Count
 
 
-def convert_daily_records(apps, schema_editor):
+def validate_and_convert_daily_records(apps, schema_editor):
     AttendanceLog = apps.get_model("core", "AttendanceLog")
-    # The earliest check-in is retained where a legacy system stored several
-    # session records for one student/day. Deployments should back up first.
-    seen = set()
-    for row in AttendanceLog.objects.order_by("student_id", "attendance_date", "scanned_at", "created_at", "id"):
-        key = (row.student_id, row.attendance_date)
-        if key in seen:
-            row.delete()
-            continue
-        seen.add(key)
-        if row.status == "on_time":
-            row.status = "present"
-            row.save(update_fields=["status"])
+    duplicates = AttendanceLog.objects.values("student_id", "attendance_date").annotate(count=Count("id")).filter(count__gt=1)
+    if duplicates.exists():
+        raise RuntimeError(
+            "Daily attendance migration stopped because legacy duplicate records exist. "
+            "Run the documented preflight query, back up the database, and approve a data-cleanup plan before retrying."
+        )
+    AttendanceLog.objects.filter(status="on_time").update(status="present")
 
 
 class Migration(migrations.Migration):
@@ -22,7 +18,7 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.RemoveConstraint(model_name="attendancelog", name="uniq_student_date_session_attendance"),
-        migrations.RunPython(convert_daily_records, migrations.RunPython.noop),
+        migrations.RunPython(validate_and_convert_daily_records, migrations.RunPython.noop),
         migrations.AlterField(
             model_name="attendancelog",
             name="status",
