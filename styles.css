@@ -419,3 +419,45 @@ tbody td strong{font-weight:700}
   .auth-card{padding:24px 20px;border-radius:14px}
   .auth-brand .brand-logo{height:30px}
 }
+
+/* ==========================================================================
+   Django integration additions (Nov 2026)
+   Login-only enrollment notice, campus label, scan progress, GPS retry,
+   duplicate confirmation state and extra status badges.
+   ========================================================================== */
+.top-campus{font-size:10.5px;color:var(--muted-fg);font-weight:600}
+@media(max-width:860px){.top-campus{display:none}}
+
+.enroll-note{
+  margin-top:18px;padding:14px 16px;border-radius:12px;
+  background:rgba(9,80,195,.06);border:1px solid rgba(9,80,195,.16);
+}
+.enroll-note strong{display:block;font-family:var(--font-display);font-size:12.5px;color:var(--primary);margin-bottom:5px}
+.enroll-note p{margin:0;font-size:12px;line-height:1.6;color:var(--muted-fg)}
+.session-note{margin:14px 0 0;font-size:11.5px;line-height:1.55;color:var(--muted-fg);text-align:center}
+
+.status-pill.absent{background:rgba(220,40,40,.1);color:#a81f1f}
+.confirmation-status.absent{background:rgba(220,40,40,.1);color:#a81f1f}
+/* Unknown backend status: visible, but never green. */
+.status-pill.neutral{background:rgba(100,116,139,.14);color:#41506a}
+.confirmation-status.neutral{background:rgba(100,116,139,.14);color:#41506a}
+.empty-cell.error{color:var(--destructive)}
+
+/* --- scan progress + retry --- */
+.scan-state{
+  display:flex;align-items:center;gap:14px;margin-top:16px;padding:16px 18px;
+  border-radius:12px;background:#fff;border:1px solid var(--border);box-shadow:var(--shadow-soft);
+}
+.scan-state strong{display:block;font-family:var(--font-display);font-size:13.5px;margin-bottom:2px}
+.scan-state small{font-size:11.5px;color:var(--muted-fg)}
+.scan-spinner{
+  width:22px;height:22px;flex:0 0 22px;border-radius:50%;
+  border:2.5px solid rgba(9,80,195,.2);border-top-color:var(--primary);
+  animation:scan-spin .8s linear infinite;
+}
+@keyframes scan-spin{to{transform:rotate(360deg)}}
+.scan-retry{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+
+/* --- duplicate confirmation --- */
+.confirmation-card.duplicate .success-mark{background:rgba(245,159,10,.16);color:#9a6106}
+.confirmation-card.duplicate #confirmationEyebrow{color:#9a6106}

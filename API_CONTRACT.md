@@ -1,183 +1,209 @@
-# Engineer A ↔ Engineer B API Integration Contract
+# Engineer A ↔ Engineer B API Contract — Student Portal
 
-> **Status note (18 November 2026).** This contract describes the session-based API that is
-> implemented today. The project supervisor has approved a change to **one attendance record
-> per student per calendar day**, with statuses Present / Late / Absent, which is **not yet
-> implemented** in `server.py` or this contract. The open question is which single daily cutoff
-> defines Late; until that is agreed, the session cutoffs below remain in force. See section 7
-> of `README.md` for the required changes.
+**Owner of this document:** Engineer A (student portal)
+**Backend owner:** Engineer B (Django, source of truth)
+**Last updated:** 19 November 2026
 
-This frontend is intentionally independent of Engineer B's implementation. The API base URL is configured at the top of `app.js` and is derived from the page's own origin, so the portal calls whichever host served it:
+This file describes what the student portal calls. It does not describe Engineer B's
+internals, and the portal never re-implements a backend decision.
 
-```js
-API_BASE_URL: (() => {
-  const { protocol, origin } = window.location;
-  if (protocol === "http:" || protocol === "https:") return `${origin}/api/v1`;
-  return "http://localhost:8000/api/v1";   // opened from file://
-})(),
+## Base URL
+
+| Environment | Base URL |
+|---|---|
+| Production | `https://fellowship.learn2earn.ng/api/v1/` |
+| Local Django | `http://127.0.0.1:8000/api/v1/` |
+| Local mock (dev only) | `http://127.0.0.1:8000/api/v1/` from `server.py` |
+
+The portal resolves the base URL in `app.js` (`CONFIG.API_BASE_URL`):
+
+1. `window.LEARN2EARN_API_BASE` if set before `app.js` loads, else
+2. the `learn2earn-api-base` meta tag in `index.html`, else
+3. `<page origin>/api/v1` for `http(s)` pages (so Django can serve the portal at `/student/`
+   and the API at `/api/v1/` on the same host), else
+4. `https://fellowship.learn2earn.ng/api/v1/` when opened from `file://`.
+
+There is exactly one place to change the address, and no call site hard-codes a host.
+
+## Authentication
+
+Django token authentication. The header is **`Authorization: Token <token>`**.
+`Bearer` is never sent and is rejected by the local mock.
+
+- Students cannot register. Accounts are created by a mentor or administrator.
+- Token lifetime: **12 hours**. The portal stores `{token, student, savedAt}` in
+  `sessionStorage`, so a refresh in the same tab keeps the session and a new tab does not.
+- On any `401` the portal clears the session and returns to the login screen.
+
+### 1. Student login
+
+`POST /auth/student/login/`
+
+```json
+{"username":"student_username","password":"student_password"}
 ```
 
-Override it only when the frontend must talk to a different host, for example Engineer B's server during integration. No trailing slash. The backend must enable CORS for the frontend origin.
+`200`:
 
-## Required endpoints
-
-All JSON requests use `Content-Type: application/json`. Authenticated requests use:
-
-`Authorization: Bearer <access_token>`
-
-### 1. Register student
-
-`POST /auth/register`
-
-Request:
 ```json
 {
-  "full_name": "Myles Odeh",
-  "username": "myles_odeh",
-  "password": "a-long-password"
-}
-```
-
-The frontend normalizes usernames to lowercase and removes spaces. The backend MUST repeat validation and normalization; never trust frontend validation. Username must be unique. Hash passwords with a password-hashing algorithm such as Argon2id or bcrypt. Never store plaintext passwords.
-
-Suggested success response (201):
-```json
-{
-  "access_token": "signed-access-token",
-  "token_type": "bearer",
+  "token": "9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b",
   "student": {
-    "id": "student-id",
+    "id": "3f1c…",
     "full_name": "Myles Odeh",
-    "username": "myles_odeh"
+    "username": "myles_odeh",
+    "campus": "Lagos Campus"
   }
 }
 ```
 
-If registration does not automatically sign in, return the created student object without an access token; the UI will ask the student to sign in.
+The portal reads `token` (falling back to `access_token` / `key`) and the profile from
+`student` (falling back to `user` / `profile`). `campus` may be a string or an object with
+`name`/`code`; both are handled.
 
-### 2. Login
+`401` `{"detail": "Incorrect username or password."}` → shown as-is.
 
-`POST /auth/login`
+### 2. Logout
 
-Request:
-```json
-{"username":"myles_odeh","password":"a-long-password"}
-```
+`POST /auth/logout/` with the Token header. `200` is enough; the portal clears local state
+regardless of the response.
 
-Success response:
+## 3. Scan attendance
+
+`POST /attendance/scan/`
+
 ```json
 {
-  "access_token": "signed-access-token",
-  "token_type": "bearer",
-  "student": {
-    "id": "student-id",
+  "qr_payload": "{\"version\":1,\"token\":\"signed-token\",\"expires_at\":1794908400}",
+  "latitude": 6.5244,
+  "longitude": 3.3792,
+  "accuracy": 15
+}
+```
+
+- `qr_payload` is the **exact** decoded camera text. The portal never trims, parses or
+  validates it before sending, and never decides whether a QR is valid.
+- Coordinates are a fresh `navigator.geolocation` fix per scan (`maximumAge: 0`,
+  `enableHighAccuracy: true`).
+- QR tokens expire after 30 seconds. The backend owns that check.
+
+`201`:
+
+```json
+{
+  "detail": "Attendance recorded.",
+  "attendance": {
     "full_name": "Myles Odeh",
-    "username": "myles_odeh"
+    "username": "myles_odeh",
+    "session_type": "morning",
+    "attendance_date": "2026-11-19",
+    "scanned_at": "2026-11-19T08:04:12.000Z",
+    "scan_time_wat": "09:04:12",
+    "status": "late",
+    "attendance_action": "check_in"
   }
 }
 ```
 
-Invalid credentials: HTTP 401 with a safe message. Do not reveal whether username or password was incorrect.
+**Response fields the portal reads.** `full_name`, `username`, `session_type`,
+`attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `attendance_action`.
 
-### 3. Current student's attendance history
+`status` is rendered from the backend value only; the portal never computes it and never
+compares the device clock with a cutoff. Engineer B's values are `on_time`, `late` and
+`absent`; they are humanised for the badge ("On Time", "Late", "Absent") and any other
+string, including the tolerated `present` alias, is shown verbatim. The raw value is always kept in `data-status`, so a
+change of vocabulary on the backend never breaks the portal.
 
-`GET /students/me/attendance?month=2026-11`
+`attendance_action` is shown verbatim in the confirmation card's "BACKEND ACTION" row and
+kept in `data-action`. The portal does not branch on its value: the duplicate path is driven
+by HTTP 409 and `code: duplicate_attendance`, not by this field.
 
-Success response:
+`attendance_action` values are `check_in` and `check_out` per Engineer B's published contract
+(`docs/ENGINEER_A_API.md`); the mock mirrors them (override with `MOCK_ATTENDANCE_ACTION`).
+
+**Duplicate responses may omit the record.** Engineer B's 409 returns only
+`{success, code: "duplicate_attendance", message}`. The portal therefore re-reads
+`/student/attendance-history/` and displays today's existing record, marked as already checked
+in. When history has no record for today the notice is shown without a card: the portal never
+invents attendance data. If Partner B later includes the record in the 409 body, the portal
+uses it directly and skips the lookup.
+
+Error codes the portal maps to student-readable messages:
+
+| HTTP | `code` | Meaning |
+|---|---|---|
+| 409 | `duplicate_attendance` | Already checked in for this session |
+| 403 | `qr_expired` | QR past its 30-second life |
+| 400 | `invalid_qr` | Malformed or not an attendance code |
+| 403 | `wrong_campus` | Outside the campus geofence |
+| 403 | `session_inactive` | No open session for that QR |
+| 403 | `gps_accuracy` | Location too imprecise |
+
+Cutoffs, the status enum and duplicate protection are Engineer B's. Current documented
+defaults are morning 09:10, afternoon 13:10, evening 17:10, with a scan exactly at the
+cutoff counted as Late. The portal displays whatever status the backend returns.
+| 400 | `gps_required` | No coordinates supplied |
+| 401 | — | Token missing, expired or revoked |
+
+A `409` may include the original record as `attendance`; when it does, the portal shows that
+record in the confirmation card instead of erasing it. When it does not, the message
+"Already checked in for this session." is shown and the previous confirmation stays intact.
+
+Any `detail` string from the backend is treated as student-safe text and displayed.
+
+## 4. Attendance history
+
+`GET /student/attendance-history/` with the Token header.
+
+The response is a **bare list**:
+
 ```json
-{
-  "records": [
-    {
-      "id": "attendance-id",
-      "session_id": "session-id",
-      "session_name": "Web Development - Morning",
-      "attended_at": "2026-11-18T08:15:30+01:00",
-      "status": "on_time"
-    }
-  ],
-  "total_sessions": 20
-}
-```
-
-`total_sessions` is optional. If absent, the frontend intentionally displays no attendance percentage rather than inventing a denominator. `status` must be `on_time` or `late`. `attended_at` should be an ISO-8601 timestamp with timezone. The UI formats it in `Africa/Lagos` (WAT).
-
-### Session windows and status (WAT)
-
-`status` is decided by the time the scan is received, never by the client.
-
-| Session   | On time from | On time until | Late from |
-|-----------|--------------|---------------|-----------|
-| Morning   | QR generation (09:00) | 09:10 | 09:11 |
-| Afternoon | QR generation (13:00) | 13:10 | 13:11 |
-| Evening   | QR generation (17:00) | 17:15 | 17:16 |
-
-The cutoff minute itself is on time. A late scan must still be recorded with
-`status: "late"` rather than rejected; only codes that are malformed, forged, for another
-day, or past expiry are refused.
-
-### 4. Check in using QR payload
-
-`POST /attendance/check-in`
-
-Request:
-```json
-{"qr_payload":"opaque-signed-qr-payload"}
-```
-
-Success response:
-```json
-{
-  "attendance_id": "attendance-id",
-  "student": {
-    "id": "student-id",
+[
+  {
+    "id": "…",
     "full_name": "Myles Odeh",
-    "username": "myles_odeh"
-  },
-  "session_id": "session-id",
-  "session_name": "Web Development - Morning",
-  "attended_at": "2026-11-18T08:15:30+01:00",
-  "status": "on_time"
-}
+    "username": "myles_odeh",
+    "session_type": "morning",
+    "attendance_date": "2026-11-19",
+    "scanned_at": "2026-11-19T08:04:12.000Z",
+    "scan_time_wat": "09:04:12",
+    "status": "late"
+  }
+]
 ```
 
-Duplicate check-in should return HTTP 409, preferably:
-```json
-{
-  "detail": "Already checked in for this session.",
-  "code": "DUPLICATE_ATTENDANCE",
-  "already_checked_in": true
-}
-```
+The portal uses `scan_time_wat` verbatim for the time column and falls back to `scanned_at`
+formatted in `Africa/Lagos`. Month filtering happens in the frontend on `attendance_date`.
+No percentage or total-session figure is shown, because this endpoint does not supply a
+reliable denominator.
 
-The UI also recognizes `already_checked_in: true` in a success response.
+## Attendance rules (backend-owned)
 
-## Security and responsibility boundaries
+| Session | Cutoff (WAT) |
+|---|---|
+| Morning | 09:10 |
+| Afternoon | 13:10 |
+| Evening | 17:10 |
 
-Engineer A (this module):
-- Normalizes username input for a good user experience.
-- Displays authenticated student data and attendance records.
-- Opens the browser camera and submits the scanned QR payload.
-- Displays the server's attendance result and duplicate response.
-- Formats server timestamps for `Africa/Lagos`.
+A scan exactly at the cutoff is **Late**. Duplicate protection is per student, per session,
+per day. The portal does not enforce or recompute any of this.
 
-Engineer B (backend / system owner):
-- Validates and normalizes usernames again; enforces uniqueness in the database.
-- Hashes passwords and verifies login credentials.
-- Issues and validates signed access tokens or secure sessions.
-- Derives student identity from the authenticated principal, never from a student ID supplied by the browser.
-- Signs QR payloads and verifies signature, expiry, session state and eligibility.
-- Uses server time in the configured institutional timezone/rules to calculate `on_time` or `late`.
-- Enforces duplicate attendance with a database uniqueness constraint and a transaction-safe insert. Today the agreed key is unique `(student_id, session_id)`; under the approved daily-attendance policy it becomes unique `(student_id, attendance_date)`.
-- Returns attendance records only for the authenticated student.
-- Applies rate limits, input validation, CORS allow-listing and audit logging.
+## Open policy conflicts — for the Project Manager and CEO
 
-## Integration checklist for Engineer B
+1. **Daily versus per-session records.** An earlier project decision specified one
+   attendance record per student per calendar day. The current contract protects duplicates
+   per session, so a student can hold three records in one day. The portal implements
+   neither rule itself; it displays whatever the backend records. A decision is required
+   before either side changes behaviour.
+2. **Evening cutoff 17:10 versus 17:15.** The contract supplied for this task says 17:10;
+   an earlier instruction from the student-portal side said 17:15. The portal displays the
+   backend's answer, so this only affects Engineer B's calculation and the README table.
+3. **Cutoff boundary.** The current contract states a scan exactly at the cutoff is Late.
+   The earlier portal mock treated the cutoff minute as on time. The mock now follows the
+   contract (`>= cutoff` is Late); no frontend code depends on either rule.
 
-- [ ] Confirm API base URL and update `CONFIG.API_BASE_URL` in `app.js`.
-- [ ] Implement the endpoints and response shapes documented above, or agree on a mapping before changing the frontend.
-- [ ] Configure CORS for the deployed frontend origin.
-- [ ] Confirm whether registration is open or requires an invitation/student code. If approval is required, add the agreed field and validation to the registration contract.
-- [ ] Confirm token expiry and refresh/logout strategy. For production, prefer secure, HttpOnly, SameSite cookies for refresh sessions; avoid long-lived tokens in localStorage.
-- [ ] Serve the frontend over HTTPS so mobile browsers can access the camera.
-- [ ] Test duplicate check-in using two simultaneous requests; only one attendance row may be created.
-- [ ] Confirm the single daily cutoff for the approved one-record-per-day policy, then agree the status vocabulary (`present` / `late` / `absent`) and the absence-marking process before either side changes code.
+## CORS
+
+The Django deployment must allow the student portal origin. If the portal is served from the
+same host at `/student/`, the requests are same-origin and need no CORS headers. The local
+mock sends `Access-Control-Allow-Origin: *` for convenience only.

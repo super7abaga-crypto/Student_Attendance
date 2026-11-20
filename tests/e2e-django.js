@@ -1,0 +1,116 @@
+const { chromium } = require('playwright-core');
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+// Runs the portal against Partner B's REAL Django backend (no mocks).
+// Prerequisites are documented in tests/README.md.
+const DJ = process.env.DJANGO_DIR || path.join(__dirname, '..', '..', 'Student_Attendance-backend');
+const API = process.env.API_BASE || 'http://127.0.0.1:8010/api/v1';
+const PORTAL = process.env.PORTAL_URL || 'http://127.0.0.1:8020/index.html';
+const SHOTS = process.env.SHOTS || path.join(__dirname, 'screenshots');
+const CHROME = process.env.CHROME_PATH || '/usr/bin/google-chrome';
+const ENV = { ...process.env, DJANGO_SETTINGS_MODULE: 'config.settings.dev',
+  ATTENDANCE_SECRET: 'local-audit-qr-secret-0123456789abcdef',
+  DJANGO_SECRET_KEY: 'local-audit-django-secret-0123456789abcdef' };
+
+let pass = 0, fail = 0;
+const check = (name, ok, detail = '') => {
+  if (ok) { pass++; console.log('  PASS  ' + name); }
+  else { fail++; console.log('  FAIL  ' + name + (detail ? '  ->  ' + String(detail).slice(0, 200) : '')); }
+};
+const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, '\\"')}"`, { cwd: DJ, env: ENV, encoding: 'utf8' });
+
+(async () => {
+  fs.mkdirSync(SHOTS, { recursive: true });
+  // clean slate: remove today's attendance for the test student
+  sh("from apps.core.models import AttendanceLog; print('deleted', AttendanceLog.objects.all().delete())");
+
+  const browser = await chromium.launch({ executablePath: CHROME,
+    args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 },
+    permissions: ['geolocation'], geolocation: { latitude: 4.8156, longitude: 7.0498, accuracy: 15 } });
+  await context.addInitScript((api) => { window.LEARN2EARN_API_BASE = api; }, API);
+  const page = await context.newPage();
+  const consoleErrors = [];
+  page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+  page.on('pageerror', e => consoleErrors.push(String(e)));
+
+  console.log('\n1. Login against real Django');
+  await page.goto(PORTAL, { waitUntil: 'networkidle' });
+  await page.fill('#loginUsername', 'ada.okafor');
+  await page.fill('#loginPassword', 'student-pass-123');
+  await page.click('#loginFormEl button[type=submit]');
+  await page.waitForSelector('#authScreen.hidden', { timeout: 8000 }).catch(() => {});
+  check('portal opened after real login', await page.isVisible('#dashboardView'));
+  check('full name from Django', (await page.textContent('#topName')).trim() === 'Ada Okafor', await page.textContent('#topName'));
+  check('username from Django', (await page.textContent('#topUsername')).trim() === '@ada.okafor', await page.textContent('#topUsername'));
+  const campusTop = (await page.textContent('#topCampus')).trim();
+  const campusProfile = (await page.textContent('#profileCampus')).trim();
+  check('campus shows campus_name, not the UUID', campusTop === 'CTEC' && campusProfile === 'CTEC', 'topCampus=' + campusTop + ' profileCampus=' + campusProfile);
+  await page.screenshot({ path: path.join(SHOTS, 'e2e-dashboard.png') });
+
+  console.log('\n2. Session persistence (same tab reload)');
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(1200);
+  check('session restored after reload', await page.isVisible('#dashboardView'));
+
+  console.log('\n3. Live QR scan (backend-minted, 30s TTL)');
+  sh("from apps.core.models import Campus, SessionRun; from apps.core import services; from django.utils import timezone; from django.contrib.auth import get_user_model; import json; U=get_user_model(); m=U.objects.get(username='campus_admin'); c=Campus.objects.get(name='CTEC'); r,_=SessionRun.objects.get_or_create(campus=c, attendance_date=timezone.localdate(), session_type='morning', defaults={'attendance_action':'check_in','started_by':m}); json.dump(services.mint_qr(r), open('/tmp/env2.json','w'))");
+  const envelope = JSON.parse(fs.readFileSync('/tmp/env2.json', 'utf8'));
+  await page.evaluate((p) => window.onQrDecoded(p), JSON.stringify(envelope));
+  await page.waitForSelector('#confirmationModal:not(.hidden)', { timeout: 15000 }).catch(() => {});
+  const cardOpen = await page.isVisible('#confirmationModal');
+  check('confirmation card opened for a real scan', cardOpen);
+  if (cardOpen) {
+    const status = (await page.textContent('#confirmStatus')).trim();
+    const raw = await page.getAttribute('#confirmStatus', 'data-status');
+    check('status is the backend value', raw === 'late' && status === 'LATE', 'data-status=' + raw + ' label=' + status);
+    check('attendance_action from backend', (await page.textContent('#confirmAction')).trim() === 'check_in', await page.textContent('#confirmAction'));
+    check('session label readable', (await page.textContent('#confirmSession')).trim() === 'Morning Session', await page.textContent('#confirmSession'));
+    const cardDate = (await page.textContent('#confirmDate')).trim();
+    check('date from backend', /^\d{1,2} [A-Z][a-z]{2} \d{4}$/.test(cardDate), cardDate);
+    check('time from backend', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')), await page.textContent('#confirmTime'));
+    check('student name on card', (await page.textContent('#confirmName')).trim() === 'Ada Okafor', await page.textContent('#confirmName'));
+    await page.screenshot({ path: path.join(SHOTS, 'e2e-scan-success.png') });
+    await page.click('#closeConfirmation');
+    await page.waitForTimeout(400);
+  }
+
+  console.log('\n4. Duplicate scan against real Django');
+  await page.evaluate((p) => window.onQrDecoded(p), JSON.stringify(envelope));
+  await page.waitForTimeout(2500);
+  const notice = (await page.textContent('#scanNotice')).trim();
+  check('duplicate message shown', /already checked in/i.test(notice), notice);
+  const dupCard = await page.isVisible('#confirmationModal');
+  check('duplicate shows the original record from history', dupCard);
+  if (dupCard) {
+    check('duplicate card keeps the backend name', (await page.textContent('#confirmName')).trim() === 'Ada Okafor', await page.textContent('#confirmName'));
+    check('duplicate card keeps the backend time', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')), await page.textContent('#confirmTime'));
+  }
+  await page.screenshot({ path: path.join(SHOTS, 'e2e-duplicate.png') });
+  if (dupCard) await page.click('#closeConfirmation').catch(() => {});
+
+  console.log('\n5. Attendance history from Django');
+  await page.evaluate(() => showView('history'));
+  await page.waitForTimeout(1500);
+  const rows = await page.locator('#historyRows tr').count();
+  const rowText = (await page.textContent('#historyRows')).replace(/\s+/g, ' ');
+  check('history row rendered', rows >= 1, 'rows=' + rows);
+  check('history shows morning session', /Morning Session/.test(rowText), rowText.slice(0, 120));
+  check('history shows late badge', /LATE|Late/.test(rowText), rowText.slice(0, 120));
+  await page.screenshot({ path: path.join(SHOTS, 'e2e-history.png') });
+
+  console.log('\n6. Logout');
+  await page.click('#logoutBtn');
+  await page.waitForTimeout(1200);
+  check('returned to login', await page.isVisible('#loginForm'));
+  check('sessionStorage cleared', await page.evaluate(() => sessionStorage.getItem('learn2earn.student.session') === null));
+
+  const unexpected = consoleErrors.filter(e => !/Failed to load resource/i.test(e) && !/play\(\) request was interrupted/i.test(e));
+  check('no unexpected console errors', unexpected.length === 0, unexpected.slice(0, 3).join(' | '));
+
+  await browser.close();
+  console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
