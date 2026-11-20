@@ -100,7 +100,7 @@ regardless of the response.
     "scanned_at": "2026-11-19T08:04:12.000Z",
     "scan_time_wat": "09:04:12",
     "status": "late",
-    "attendance_action": "checked_in"
+    "attendance_action": "check_in"
   }
 }
 ```
@@ -109,20 +109,24 @@ regardless of the response.
 `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `attendance_action`.
 
 `status` is rendered from the backend value only; the portal never computes it and never
-compares the device clock with a cutoff. Known spellings are humanised for the badge
-(`present` → "Present", `late` → "Late", `absent` → "Absent", legacy `on_time` → "On Time");
-any other string is shown verbatim. The raw value is always kept in `data-status`, so a
+compares the device clock with a cutoff. Engineer B's values are `on_time`, `late` and
+`absent`; they are humanised for the badge ("On Time", "Late", "Absent") and any other
+string, including the tolerated `present` alias, is shown verbatim. The raw value is always kept in `data-status`, so a
 change of vocabulary on the backend never breaks the portal.
 
 `attendance_action` is shown verbatim in the confirmation card's "BACKEND ACTION" row and
 kept in `data-action`. The portal does not branch on its value: the duplicate path is driven
 by HTTP 409 and `code: duplicate_attendance`, not by this field.
 
-> **Open item for Engineer B.** The enum behind `attendance_action` is not documented in the
-> assignment, and this repository must not invent backend vocabulary. The local mock emits
-> `checked_in` (configurable with `MOCK_ATTENDANCE_ACTION`) purely so the field can be seen
-> and tested. Please publish the authoritative value list; the frontend already renders any
-> string unchanged, so no code change will be needed to adopt it.
+`attendance_action` values are `check_in` and `check_out` per Engineer B's published contract
+(`docs/ENGINEER_A_API.md`); the mock mirrors them (override with `MOCK_ATTENDANCE_ACTION`).
+
+**Duplicate responses may omit the record.** Engineer B's 409 returns only
+`{success, code: "duplicate_attendance", message}`. The portal therefore re-reads
+`/student/attendance-history/` and displays today's existing record, marked as already checked
+in. When history has no record for today the notice is shown without a card: the portal never
+invents attendance data. If Partner B later includes the record in the 409 body, the portal
+uses it directly and skips the lookup.
 
 Error codes the portal maps to student-readable messages:
 

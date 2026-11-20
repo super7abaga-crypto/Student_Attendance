@@ -145,19 +145,28 @@ backend decides that, not the portal.
 
 | Backend value | Shown as | Notes |
 |---|---|---|
-| `present` | Present | green badge |
+| `on_time` | On Time | green badge (Engineer B's value) |
 | `late` | Late | amber badge |
 | `absent` | Absent | red badge |
-| legacy `on_time` | On Time | green badge, still accepted |
+| `present` | Present | green badge, tolerated alias only |
 | anything else | the raw value | shown verbatim, neutral grey badge |
 
-`statusClass()` colours only `late`, `absent` and the on-time family (`present`, legacy
-`on_time`). Anything unrecognised is neutral grey, so an unknown backend status is never
-mistaken for a good one.
+`statusClass()` colours only `late`, `absent` and the on-time family (`on_time`, plus the
+`present` alias). Anything unrecognised is neutral grey, so an unknown backend status is
+never mistaken for a good one.
 
 The raw value is always kept in `data-status` on the badge, and the portal never derives
 status from the device clock. If Engineer B renames a value, the badge follows with no code
 change.
+
+**Campus.** The backend sends the campus UUID in `campus` and the readable name in
+`campus_name`. The portal displays `campus_name` everywhere and keeps the UUID only as
+`student.campus_id`, so a student never sees an identifier.
+
+**Duplicates.** Engineer B's 409 carries no `attendance` object, so on a duplicate the portal
+re-reads the student's own history and shows today's existing record, clearly marked as
+already checked in. If history has nothing for today it says so and shows no card; it never
+fabricates a record.
 
 `attendance_action` is rendered verbatim in the confirmation card's BACKEND ACTION row and
 kept in `data-action`. The portal does not branch on it: duplicates are detected from HTTP 409

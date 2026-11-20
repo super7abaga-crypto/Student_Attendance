@@ -54,7 +54,7 @@ QR_SECRET = os.environ.get("QR_SECRET") or secrets.token_hex(32)
 
 TOKEN_TTL_MS = 12 * 60 * 60 * 1000          # 12 hours, per contract
 QR_TTL_SECONDS = 30   # QR tokens expire after 30 seconds
-MOCK_ATTENDANCE_ACTION = os.environ.get("MOCK_ATTENDANCE_ACTION", "checked_in")  # mock-only, see API_CONTRACT.md
+MOCK_ATTENDANCE_ACTION = os.environ.get("MOCK_ATTENDANCE_ACTION", "check_in")  # mirrors Engineer B: check_in / check_out
 
 WAT_OFFSET_MIN = 60                          # Africa/Lagos is UTC+1 all year
 SESSIONS = {
@@ -228,8 +228,8 @@ def seed() -> None:
     today = datetime.strptime(wat_parts()["date"], "%Y-%m-%d")
     for offset, session_type, status, time_wat in (
         (1, "morning", "late", "09:14:22"),
-        (2, "morning", "present", "09:03:10"),
-        (3, "afternoon", "present", "13:02:47"),
+        (2, "morning", "on_time", "09:03:10"),
+        (3, "afternoon", "on_time", "13:02:47"),
     ):
         scan_date = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
         if scan_date[:7] != wat_parts()["month"]:
@@ -499,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
                 })
 
             # Exactly at the cutoff counts as late, per the current contract.
-            status = "late" if parts["minutes"] >= SESSIONS[session_type]["cutoff"] else "present"
+            status = "late" if parts["minutes"] >= SESSIONS[session_type]["cutoff"] else "on_time"
             row = {
                 "id": str(uuid.uuid4()),
                 "student_id": student["id"],

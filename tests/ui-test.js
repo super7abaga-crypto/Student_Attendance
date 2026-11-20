@@ -77,6 +77,28 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('error shown for bad password', /Incorrect username or password/i.test(await page.textContent('#authAlert')), await page.textContent('#authAlert'));
   check('still on login screen', await page.isVisible('#loginForm'));
 
+  console.log('\n2b. Campus label handling (UUID in `campus`, label in `campus_name`)');
+  await page.route('**/auth/student/login/', async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.student = {
+      ...body.student,
+      campus: '4da96615-fceb-44f2-ba96-7081f96becdb',
+      campus_name: 'Lagos Campus',
+    };
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
+  await page.fill('#loginPassword', 'demo12345');
+  await page.click('#loginFormEl button[type=submit]');
+  await page.waitForSelector('#authScreen.hidden', { timeout: 5000 }).catch(() => {});
+  const campusText = (await page.textContent('#topCampus')).trim();
+  check('campus shows the label, never the UUID', campusText === 'Lagos Campus', campusText);
+  check('campus UUID kept as the identifier',
+    (await page.evaluate(() => JSON.parse(sessionStorage.getItem('learn2earn.student.session') || '{}').student?.campus_id || '')) === '4da96615-fceb-44f2-ba96-7081f96becdb');
+  await page.unroute('**/auth/student/login/');
+  await page.click('#logoutBtn');
+  await sleep(600);
+
   console.log('\n3. Valid login');
   await page.fill('#loginPassword', 'demo12345');
   await page.click('#loginFormEl button[type=submit]');
@@ -137,11 +159,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('confirmation time', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')), await page.textContent('#confirmTime'));
   const statusText = (await page.textContent('#confirmStatus')).trim();
   const statusRaw = await page.getAttribute('#confirmStatus', 'data-status');
-  check('attendance_action shown from backend', (await page.textContent('#confirmAction')).trim() === 'checked_in', await page.textContent('#confirmAction'));
+  check('attendance_action shown from backend', (await page.textContent('#confirmAction')).trim() === 'check_in', await page.textContent('#confirmAction'));
   // The badge must echo the backend's own value; the label is only a humanised copy.
-  const expectedLabel = { present: 'PRESENT', late: 'LATE', absent: 'ABSENT' }[statusRaw];
+  const expectedLabel = { on_time: 'ON TIME', late: 'LATE', absent: 'ABSENT' }[statusRaw];
   check('status comes from backend',
-    ['present', 'late', 'absent'].includes(statusRaw) && statusText === expectedLabel,
+    ['on_time', 'late', 'absent'].includes(statusRaw) && statusText === expectedLabel,
     'data-status=' + statusRaw + ' label=' + statusText);
   await page.screenshot({ path: path.join(SHOTS, '05-confirmation-success.png') });
   await page.click('#closeConfirmation');
@@ -157,6 +179,27 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('original time preserved', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')));
   await page.screenshot({ path: path.join(SHOTS, '06-duplicate.png') });
   await page.click('#closeConfirmation');
+  await sleep(300);
+
+  // Engineer B's real 409 carries no attendance object, so the portal must fall back to
+  // the student's own history instead of showing an empty or invented card.
+  await page.route('**/attendance/scan/', async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    delete body.attendance;
+    delete body.record;
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
+  await page.evaluate((payload) => window.onQrDecoded(payload), qr);
+  await page.waitForSelector('#confirmationModal:not(.hidden)', { timeout: 8000 }).catch(() => {});
+  await sleep(400);
+  check('409 without a body record still shows the history record',
+    /Already checked in/.test(await page.textContent('#confirmationTitle')), await page.textContent('#confirmationTitle'));
+  check('fallback record keeps the backend name', (await page.textContent('#confirmName')).trim() === 'Demo Student', await page.textContent('#confirmName'));
+  check('fallback record keeps the backend time', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')), await page.textContent('#confirmTime'));
+  await page.screenshot({ path: path.join(SHOTS, '06b-duplicate-from-history.png') });
+  await page.click('#closeConfirmation');
+  await page.unroute('**/attendance/scan/');
 
   console.log('\n8. Expired QR');
   const expired = await page.evaluate(async () => {
@@ -284,6 +327,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const classes = await page.evaluate(() => ({
     late: window.statusClass('late'),
     absent: window.statusClass('absent'),
+    onTime: window.statusClass('on_time'),
     present: window.statusClass('present'),
     legacy: window.statusClass('on_time'),
     unknown: window.statusClass('excused'),
@@ -291,12 +335,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }));
   check('late classifies as late', classes.late === 'late', classes.late);
   check('absent classifies as absent', classes.absent === 'absent', classes.absent);
-  check('present classifies as on-time', classes.present === 'on-time', classes.present);
+  check('on_time classifies as on-time', classes.onTime === 'on-time', classes.onTime);
+  check('present alias still classifies as on-time', classes.present === 'on-time', classes.present);
   check('legacy on_time classifies as on-time', classes.legacy === 'on-time', classes.legacy);
   check('unknown status is neutral, never on-time', classes.unknown === 'neutral', classes.unknown);
   check('empty status is neutral', classes.empty === 'neutral', classes.empty);
 
-  check('history statuses are backend vocabulary', badge.every((s) => ['present', 'late', 'absent'].includes(s)), JSON.stringify(badge.slice(0, 4)));
+  check('history statuses are backend vocabulary', badge.every((s) => ['on_time', 'late', 'absent'].includes(s)), JSON.stringify(badge.slice(0, 4)));
 
   // Expected HTTP error responses (401/403/409) are logged by Chrome as resource errors;
   // only unexpected JavaScript/console errors matter here.

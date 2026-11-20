@@ -74,6 +74,16 @@
   async function refresh() {
     try {
       const response = await fetch("/api/v1/dev/qr", { cache: "no-store" });
+      const contentType = response.headers.get("content-type") || "";
+      // This page talks to the LOCAL MOCK (server.py) only. Engineer B's Django serves
+      // real codes from the mentor portal at / and has no /api/v1/dev/qr route, so a
+      // JSON-less or missing answer means we are pointed at the wrong server.
+      if (!contentType.includes("application/json")) {
+        throw new Error(
+          "No dev QR endpoint on this server. This page only works with the local mock "
+          + "(python3 server.py). Against Django, use the mentor kiosk at /."
+        );
+      }
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Could not issue a QR code");
 
@@ -96,6 +106,11 @@
     } catch (error) {
       el("error").textContent = error.message;
       el("countdown").textContent = "—";
+      el("sessionName").textContent = "Kiosk unavailable";
+      el("payload").textContent = "—";
+      const frame = el("qr");
+      if (frame) frame.innerHTML = "";
+      lastPayload = "";
     }
   }
 

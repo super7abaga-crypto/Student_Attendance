@@ -160,7 +160,7 @@ def scan_body(client: Client, session: str | None = None) -> dict:
 def scenario_cutoffs() -> None:
     """Exact-cutoff and after-cutoff status, using the pinned mock clock."""
     for label, now_wat, expected in [
-        ("before cutoff (09:05)", "09:05", "present"),
+        ("before cutoff (09:05)", "09:05", "on_time"),
         ("exactly at cutoff (09:10)", "09:10", "late"),
         ("after cutoff (09:11)", "09:11", "late"),
     ]:
@@ -208,7 +208,7 @@ def main() -> int:
             check("history rows carry the contract fields", required <= set(history[0]),
                   str(sorted(set(history[0])))[:160])
             check("history status values are backend vocabulary",
-                  all(row["status"] in {"present", "late", "absent"} for row in history),
+                  all(row["status"] in {"on_time", "late", "absent"} for row in history),
                   str([row["status"] for row in history])[:80])
 
         print("\n2. QR + GPS scan")

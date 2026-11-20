@@ -37,10 +37,10 @@ const SESSION_LABELS = {
 
 // Known backend status values are humanised for the badge; anything else is shown raw.
 const STATUS_LABELS = {
-  on_time: "On Time",
-  present: "Present",
+  on_time: "On Time",   // Engineer B's authoritative value
   late: "Late",
   absent: "Absent",
+  present: "Present",   // tolerated alias, not emitted by the backend
 };
 
 const state = {
@@ -146,12 +146,31 @@ function showToast(message) {
 }
 
 /* ------------------------------------------------------------------- auth -- */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value) {
+  return UUID_RE.test(String(value || "").trim());
+}
+
 function normaliseStudent(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
-  const campusValue = source.campus ?? source.campus_name ?? source.campus_name_display ?? null;
-  let campus = "";
-  if (typeof campusValue === "string") campus = campusValue;
-  else if (campusValue && typeof campusValue === "object") campus = campusValue.name || campusValue.code || campusValue.title || "";
+  const campusObject = source.campus && typeof source.campus === "object" ? source.campus : null;
+  // The backend sends the campus UUID in `campus` and the readable label in
+  // `campus_name`; the student should never see a UUID.
+  const campusLabel = String(
+    source.campus_name
+    || source.campus_name_display
+    || campusObject?.name
+    || campusObject?.title
+    || campusObject?.code
+    || (typeof source.campus === "string" && source.campus && !isUuid(source.campus) ? source.campus : "")
+    || ""
+  );
+  const campusId = String(
+    (campusObject && (campusObject.id || campusObject.uuid))
+    || (isUuid(source.campus) ? source.campus : "")
+    || ""
+  );
   const fullName = source.full_name
     || source.name
     || [source.first_name, source.last_name].filter(Boolean).join(" ")
@@ -161,7 +180,8 @@ function normaliseStudent(raw) {
     id: source.id ?? source.student_id ?? source.pk ?? null,
     full_name: String(fullName),
     username: String(source.username || source.user_name || ""),
-    campus: String(campus || ""),
+    campus: campusLabel,
+    campus_id: campusId,
   };
 }
 
@@ -378,6 +398,27 @@ function recordRow(record) {
   </tr>`;
 }
 
+// Today in West Africa Time, as YYYY-MM-DD, to match `attendance_date`.
+function todayWatKey() {
+  const now = new Date(Date.now() + 60 * 60 * 1000);
+  return now.toISOString().slice(0, 10);
+}
+
+// The existing record for today, read from history. Returns null when the history has
+// nothing for today (or cannot be loaded) so the caller can degrade gracefully.
+async function findTodaysRecord() {
+  try {
+    if (!state.records.length) await loadAttendance({ quiet: true });
+  } catch (_) {
+    return null;
+  }
+  const today = todayWatKey();
+  const todays = sortRecords(state.records).filter(
+    (record) => String(record.attendance_date || "").slice(0, 10) === today
+  );
+  return todays[0] || null;
+}
+
 function sortRecords(records) {
   return [...records].sort((a, b) => {
     const aKey = `${a.attendance_date || ""}T${a.scan_time_wat || a.scanned_at || ""}`;
@@ -433,9 +474,9 @@ function renderHistory() {
   count.textContent = `${records.length} record${records.length === 1 ? "" : "s"}`;
 }
 
-async function loadAttendance() {
+async function loadAttendance({ quiet = false } = {}) {
   if (!state.token) return;
-  if (!state.historyLoaded) {
+  if (!state.historyLoaded && !quiet) {
     setTableState($("historyRows"), "Loading your attendance…");
     setTableState($("recentRows"), "Loading your attendance…");
   }
@@ -647,13 +688,15 @@ async function onQrDecoded(decodedText) {
 
     const described = describeScanError(error);
     if (described.duplicate) {
-      const existing = (error.body && (error.body.attendance || error.body.record)) || null;
+      // Prefer the record the backend returned with the 409; otherwise look it up in the
+      // student's own history. If neither exists we say so and never invent a record.
+      let existing = (error.body && (error.body.attendance || error.body.record)) || null;
+      if (!existing) existing = await findTodaysRecord();
       if (existing) {
-        // Keep the original attendance visible instead of replacing it with an empty card.
         showConfirmation(existing, { duplicate: true });
         showScanNotice("Already checked in for this session.");
       } else {
-        showScanNotice("Already checked in for this session.");
+        showScanNotice("Already checked in for this session.", { retry: false });
       }
       return;
     }
