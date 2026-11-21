@@ -1,4 +1,6 @@
-# LEARN 2EARN — Student Attendance Portal (Engineer A)
+# LEARN 2EARN — Student Attendance Portal (Engineer A, historical snapshot)
+
+> **Historical snapshot, superseded by the integrated Django application.** This audit describes the former standalone portal and development server as they existed on 18 November 2026. Its API routes, kiosk instructions, and claims that the production backend is absent are no longer current. Use the root `README.md` for how to run the project and [`ENGINEER_A_API.md`](ENGINEER_A_API.md) for the current integration contract.
 
 A responsive, browser-based student portal for the LEARN 2EARN attendance system. It lets a
 student register, sign in, see their attendance record, and check in by scanning the QR code

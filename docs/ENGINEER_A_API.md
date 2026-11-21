@@ -24,7 +24,7 @@ Celery Beat runs daily absence closure at 20:01 campus time when configured for 
 
 - Student login is public and returns a DRF token. Send `Authorization: Token <token>` for authenticated student calls. Tokens expire after 12 hours; sign in again to obtain a token.
 - Mentor login is public and creates a Django session cookie. For unsafe requests include the `csrftoken` cookie value in `X-CSRFToken`. Session-authenticated endpoints enforce CSRF.
-- Authenticated API endpoints use Django REST Framework authentication and permissions. Student-only endpoints verify the authenticated user's role/profile. Staff endpoints allow super-admin, campus-admin, mentor, and attendance-officer roles, then apply campus membership and action-specific permissions. Session start/end and kiosk access are limited to mentors and administrators. Campus schedule changes and monthly close/reopen are administrator-only. CSV/JSON exports require export permission (administrators are allowed).
+- Authenticated API endpoints use Django REST Framework authentication and permissions. Student-only endpoints verify the authenticated user's role/profile. Staff endpoints allow super-admin, campus-admin, mentor, and attendance-officer roles, then apply campus membership and action-specific permissions. Session start/end and kiosk access are limited to mentors and administrators. Campus schedule changes and monthly close/reopen are limited to administrators for their assigned campus. Student registration and roster changes require `can_manage_students` for that campus (or super-admin / assigned campus-admin access); student read access alone is insufficient. CSV/JSON exports require export permission (administrators are allowed).
 - Campus membership is checked server-side. Attendance officers can read scoped attendance but cannot perform mentor-only session actions or corrections.
 - Student self-registration is not exposed: `POST /auth/student/register/` is a staff-authorized student creation endpoint. Student creation requires an assigned campus and a password of at least 12 characters.
 
@@ -93,12 +93,12 @@ Except for public login, these endpoints require staff authentication and campus
 |---|---|
 | `POST /auth/mentor/login/` | Public login; success `{success, csrf_token, display_name, role}` and session cookie; invalid credentials `401 invalid_credentials`. |
 | `GET/PATCH /auth/mentor/profile/` | Authenticated staff profile and campus access; patch can update display name/password. |
-| `GET/POST /admin/campuses/`; `GET/PATCH /admin/campuses/{id}/` | Campus directory; creation is super-admin only. Campus details include coordinates, geofence radius, timezone and active state. |
-| `GET/POST /admin/campuses/{id}/schedules/` | Read schedules; create/update requires campus-admin or super-admin. Schedule fields: `id`, `campus`, `session_type`, `start_time`, `late_after`, `close_time`, `active`. |
+| `GET/POST /admin/campuses/`; `GET/PATCH /admin/campuses/{id}/` | Campus directory; creation is super-admin only. Campus details include coordinates, geofence radius, timezone and active state. Coordinates must be supplied as a valid latitude/longitude pair or both left blank; radius is 20–2,000 metres and timezone must be a valid IANA name. |
+| `GET/POST /admin/campuses/{id}/schedules/` | Read schedules; create/update requires super-admin or the campus's assigned campus-admin. Schedule fields: `id`, `campus`, `session_type`, `start_time`, `late_after`, `close_time`, `active`; `start_time <= late_after < close_time` is required. |
 | `GET /admin/tracks/?campus_id=<uuid>` | Active tracks for a campus the user can access. |
-| `GET/PATCH /admin/students/{id}/`; `GET /admin/students/?campus=<uuid>` | Campus-scoped roster. Student changes require campus-admin access. |
+| `GET/PATCH /admin/students/{id}/`; `GET /admin/students/?campus=<uuid>` | Campus-scoped roster. Reads require campus membership; updates and lifecycle actions require `can_manage_students` or super-admin / assigned campus-admin access. |
 | `POST /auth/student/register/` | Staff-created student account; campus manage permission required. Duplicate username is `409 username_taken`. |
-| `POST /admin/students/{id}/deactivate/`, `/reactivate/`, `/transfer/` | Campus-managed student lifecycle. Transfer requires destination campus and reason. |
+| `POST /admin/students/{id}/deactivate/`, `/reactivate/`, `/transfer/` | Campus-managed student lifecycle. Transfer requires management access to both campuses and a reason. |
 | `GET /admin/students/export/?campus=<uuid>` | CSV roster export; export permission required. |
 | `POST /admin/students/bulk_import/?campus_id=<uuid>` | Staff CSV import; max 2 MB and 5,000 rows. Returns `{created, errors}`. |
 | `POST /mentor/qr/start/` with `{campus_id, session_type}` | Mentor/admin opens one scheduled session; returns `{session_id, campus, session_type, attendance_action, state}`. Invalid window `400 outside_session_window`; closed run `400 session_closed`. |
@@ -108,7 +108,7 @@ Except for public login, these endpoints require staff authentication and campus
 | `GET /mentor/attendance/?campus_id=<uuid>[&date=YYYY-MM-DD&date_from=…&date_to=…&status=present|late|absent&session_type=…&source=…&track_name=…&cohort_name=…&search=…]` | Paginated response (`count`, `next`, `previous`, `results`), 50 rows/page. Date-specific calls materialize completed-day absences first. `format=csv` returns protected CSV and requires export permission. |
 | `GET /mentor/attendance/summary/?campus_id=<uuid>[&date=YYYY-MM-DD]` | `{campus: <CampusSerializer>, date, timezone, summary: <object>}`. Summary keys: `active_students`, `present`, `late`, `on_time`, `absent`, `not_checked_out`, `attendance_percentage`, `completed_sessions`, `morning_check_ins`, `afternoon_check_ins`, `evening_check_outs`. `on_time` counts `present` rows; current daily mode reports completed session `daily` after evening close and `not_checked_out: 0`. |
 | `POST /mentor/attendance/manual/` | Audited status correction or daily-row creation. A reason is mandatory. The same daily uniqueness applies; duplicate is `409 duplicate_attendance`. |
-| `POST /mentor/attendance/location-override/` | Mentor/admin audited override requires matching recent location rejection, reason, session and campus access. |
+| `POST /mentor/attendance/location-override/` | Mentor/admin audited override requires a matching location rejection from the same session within 15 minutes, today's campus-local date, an open monthly report, a reason, and campus correction access. |
 | `GET /admin/reports/?campus_id=<uuid>&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD` | `{results: [{campus, records, present, late, absent, by_session}]}` for accessible campuses. |
 | `GET /admin/monthly-reports/?campus_id=<uuid>` | `{results: [...]}` monthly-report metadata. |
 | `POST /admin/monthly-close/` | Administrator closes a completed month and returns report metadata including CSV URL. |

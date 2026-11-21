@@ -1,4 +1,6 @@
-# Engineer A ↔ Engineer B API Integration Contract
+# Legacy Engineer A ↔ Engineer B API Contract
+
+> **Superseded.** This file describes the old standalone JSON development server, its Bearer-token routes, and an earlier attendance contract. It is not the API used by the current Django application. Use [`docs/ENGINEER_A_API.md`](docs/ENGINEER_A_API.md) as the current API reference.
 
 > **Status note (18 November 2026).** This contract describes the session-based API that is
 > implemented today. The project supervisor has approved a change to **one attendance record

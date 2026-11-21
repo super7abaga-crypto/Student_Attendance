@@ -27,12 +27,34 @@ class CampusSerializer(serializers.ModelSerializer):
         except ZoneInfoNotFoundError: raise serializers.ValidationError("Use a valid IANA timezone, such as Africa/Lagos.")
         return value
 
+    def validate(self, attrs):
+        latitude = attrs.get("latitude", getattr(self.instance, "latitude", None))
+        longitude = attrs.get("longitude", getattr(self.instance, "longitude", None))
+        if (latitude is None) != (longitude is None):
+            raise serializers.ValidationError({"latitude": "Set both latitude and longitude, or leave both blank."})
+        if latitude is not None and not -90 <= latitude <= 90:
+            raise serializers.ValidationError({"latitude": "Latitude must be between -90 and 90."})
+        if longitude is not None and not -180 <= longitude <= 180:
+            raise serializers.ValidationError({"longitude": "Longitude must be between -180 and 180."})
+        return attrs
+
 
 class ScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = SessionSchedule
         fields = ["id", "campus", "session_type", "start_time", "late_after", "close_time", "active"]
         read_only_fields = ["id"]
+
+    def validate(self, attrs):
+        start = attrs.get("start_time", getattr(self.instance, "start_time", None))
+        last_on_time = attrs.get("late_after", getattr(self.instance, "late_after", None))
+        close = attrs.get("close_time", getattr(self.instance, "close_time", None))
+        if start is not None and last_on_time is not None and close is not None:
+            if start >= close:
+                raise serializers.ValidationError({"close_time": "Session close must be later than its start."})
+            if not start <= last_on_time < close:
+                raise serializers.ValidationError({"late_after": "The last on-time minute must be within the session window."})
+        return attrs
 
 
 class StudentSerializer(serializers.ModelSerializer):

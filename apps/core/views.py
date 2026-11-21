@@ -14,7 +14,7 @@ from rest_framework import status, viewsets
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
 from rest_framework.generics import ListCreateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated, SAFE_METHODS, BasePermission
 from rest_framework.response import Response
@@ -31,12 +31,12 @@ from .services import (DEFAULT_SCHEDULES, accessible_campuses, attended_sessions
                        verify_qr, record_scan, QRValidationError, ScanLocationError, status_for_attendance_time)
 
 
-def scoped_campus(user, campus_id, *, correct=False):
+def scoped_campus(user, campus_id, *, manage=False, correct=False):
     try:
         campus = Campus.objects.get(pk=campus_id, active=True)
     except (Campus.DoesNotExist, ValueError, TypeError):
         raise ValidationError({"campus_id": "Campus not found."})
-    if not user_can_access(user, campus, correct=correct):
+    if not user_can_access(user, campus, manage=manage, correct=correct):
         raise PermissionDenied("You are not authorised for this campus.")
     return campus
 
@@ -141,7 +141,7 @@ class StudentRegisterView(APIView):
     def post(self, request):
         serializer = StudentCreateSerializer(data=request.data); serializer.is_valid(raise_exception=True)
         data = serializer.validated_data; campus = scoped_campus(request.user, data["campus"])
-        if not user_can_access(request.user, campus, manage=True) and request.user.role not in (User.Role.SUPER_ADMIN, User.Role.CAMPUS_ADMIN):
+        if not user_can_access(request.user, campus, manage=True):
             raise PermissionDenied("Student registration is not permitted.")
         username = data["username"]
         if User.objects.filter(username__iexact=username).exists():
@@ -211,7 +211,7 @@ class AttendanceScanView(APIView):
             return Response({"success":False,"code":"duplicate_attendance","message":str(exc)},status=409)
         except ScanLocationError as exc:
             audit(request.user, "attendance.location_rejected", campus=student.campus, obj=student,
-                  details={"result":exc.result,"accuracy_m":exc.accuracy,"distance_m":exc.distance},request=request)
+                  details={"result":exc.result,"accuracy_m":exc.accuracy,"distance_m":exc.distance,"session_type":exc.session_type},request=request)
             return Response({"success":False,"code":exc.code,"message":str(exc)},status=403)
         except PermissionError as exc:
             return Response({"success":False,"code":"student_inactive","message":str(exc)},status=403)
@@ -275,6 +275,8 @@ class CampusViewSet(viewsets.ModelViewSet):
             rows=[schedule_for(campus,s) for s in DEFAULT_SCHEDULES]
             return Response(ScheduleSerializer(rows,many=True).data)
         if request.user.role not in (User.Role.CAMPUS_ADMIN,User.Role.SUPER_ADMIN) and not request.user.is_superuser: raise PermissionDenied("Only campus administrators may change session schedules.")
+        if request.user.role == User.Role.CAMPUS_ADMIN and request.user.assigned_campus_id != campus.pk:
+            raise PermissionDenied("Campus administrators may only change schedules for their assigned campus.")
         serializer=ScheduleSerializer(data={**request.data,"campus":campus.pk}); serializer.is_valid(raise_exception=True)
         row,_=SessionSchedule.objects.update_or_create(campus=campus,session_type=serializer.validated_data["session_type"],defaults={k:v for k,v in serializer.validated_data.items() if k not in ("campus","session_type")})
         audit(request.user,"campus.schedule.update",campus=campus,obj=row,request=request)
@@ -306,6 +308,8 @@ class MonthlyReopenView(APIView):
         try: report=MonthlyReport.objects.select_related("campus").get(pk=report_id)
         except MonthlyReport.DoesNotExist: return Response({"success":False,"code":"report_not_found","message":"Report not found."},status=404)
         if request.user.role not in (User.Role.CAMPUS_ADMIN,User.Role.SUPER_ADMIN) and not request.user.is_superuser: raise PermissionDenied("Only an administrator can reopen reports.")
+        if request.user.role == User.Role.CAMPUS_ADMIN and request.user.assigned_campus_id != report.campus_id:
+            raise PermissionDenied("Campus administrators may only reopen reports for their assigned campus.")
         if not user_can_access(request.user,report.campus): raise PermissionDenied("You are not authorised for this campus.")
         report.closed=False; report.reopened_at=timezone.now(); report.reopened_by=request.user; report.save(update_fields=["closed","reopened_at","reopened_by"])
         audit(request.user,"report.month.reopen",campus=report.campus,obj=report,reason=str(request.data.get("reason", "")),request=request)
@@ -316,37 +320,41 @@ class StudentViewSet(viewsets.ModelViewSet):
     serializer_class = StudentSerializer
     queryset = Student.objects.none()
     permission_classes = [IsAuthenticated, StaffRolePermission]
-    http_method_names = ["get", "patch", "head", "options"]
+    http_method_names = ["get", "post", "patch", "head", "options"]
     search_fields = ["user__username", "user__first_name", "user__last_name", "student_code"]
     filterset_fields = ["campus", "track", "cohort", "active"]
     ordering_fields = ["registration_date", "user__username"]
-    def initial(self,request,*args,**kwargs):
-        super().initial(request,*args,**kwargs)
-        if request.method not in ("GET","HEAD","OPTIONS") and request.user.role not in (User.Role.CAMPUS_ADMIN,User.Role.SUPER_ADMIN) and not request.user.is_superuser:
-            raise PermissionDenied("Student administration requires campus administrator access.")
+    def create(self,request,*args,**kwargs):
+        raise MethodNotAllowed("POST",detail="Use the staff student registration endpoint.")
     def get_queryset(self):
         if getattr(self,"swagger_fake_view",False): return Student.objects.none()
         return Student.objects.filter(campus__in=accessible_campuses(self.request.user)).select_related("user","campus","track","cohort")
     def perform_update(self, serializer):
+        student=self.get_object()
+        if not user_can_access(self.request.user,student.campus,manage=True):
+            raise PermissionDenied("Student management is not permitted for this campus.")
         student=serializer.save(); audit(self.request.user,"student.update",campus=student.campus,obj=student,request=self.request)
     @action(detail=True,methods=["post"])
     def deactivate(self,request,pk=None):
         student=self.get_object()
-        if not user_can_access(request.user,student.campus,manage=True) and request.user.role not in (User.Role.SUPER_ADMIN,User.Role.CAMPUS_ADMIN): raise PermissionDenied("Student management is not permitted.")
+        if not user_can_access(request.user,student.campus,manage=True): raise PermissionDenied("Student management is not permitted for this campus.")
         student.active=False; student.user.active_student=False; student.user.is_active=False
         student.save(update_fields=["active"]); student.user.save(update_fields=["active_student","is_active"])
         audit(request.user,"student.deactivate",campus=student.campus,obj=student,request=request)
         return Response({"success":True})
     @action(detail=True,methods=["post"])
     def reactivate(self,request,pk=None):
-        student=self.get_object(); student.active=True; student.user.active_student=True; student.user.is_active=True
+        student=self.get_object()
+        if not user_can_access(request.user,student.campus,manage=True): raise PermissionDenied("Student management is not permitted for this campus.")
+        student.active=True; student.user.active_student=True; student.user.is_active=True
         student.save(update_fields=["active"]); student.user.save(update_fields=["active_student","is_active"])
         audit(request.user,"student.reactivate",campus=student.campus,obj=student,request=request)
         return Response({"success":True})
     @action(detail=True,methods=["post"])
     def transfer(self,request,pk=None):
-        student=self.get_object(); destination=scoped_campus(request.user,request.data.get("campus_id"))
-        if not user_can_access(request.user,student.campus,manage=True) and request.user.role not in (User.Role.SUPER_ADMIN,User.Role.CAMPUS_ADMIN): raise PermissionDenied("Student transfer is not permitted.")
+        student=self.get_object()
+        if not user_can_access(request.user,student.campus,manage=True): raise PermissionDenied("Student transfer is not permitted for the student's current campus.")
+        destination=scoped_campus(request.user,request.data.get("campus_id"),manage=True)
         reason=str(request.data.get("reason","")).strip()
         if not reason: raise ValidationError({"reason":"A transfer reason is required."})
         old=student.campus
@@ -391,7 +399,7 @@ class StudentViewSet(viewsets.ModelViewSet):
             try:
                 data={"username":row.get("username",""),"password":row.get("password",""),"full_name":row.get("full_name", ""),"email":row.get("email", ""),"campus":request.query_params.get("campus_id") or row.get("campus_id","")}
                 serializer=StudentCreateSerializer(data=data); serializer.is_valid(raise_exception=True); val=serializer.validated_data
-                campus=scoped_campus(request.user,val["campus"]); username="".join(val["username"].lower().split())
+                campus=scoped_campus(request.user,val["campus"],manage=True); username="".join(val["username"].lower().split())
                 if User.objects.filter(username__iexact=username).exists(): raise ValueError("username already exists")
                 names=val["full_name"].strip().split(" ",1)
                 with transaction.atomic():
@@ -523,10 +531,14 @@ class AttendanceManualView(APIView):
         try:
             student=Student.objects.select_related("campus","track","cohort","user").get(pk=request.data.get("student_id"),active=True)
         except (Student.DoesNotExist,ValueError,TypeError): return Response({"success":False,"code":"student_not_found","message":"Active student not found."},status=404)
-        if not user_can_access(request.user,student.campus,correct=True) and not (request.user.role in (User.Role.CAMPUS_ADMIN,User.Role.SUPER_ADMIN) and user_can_access(request.user,student.campus)):
+        if not user_can_access(request.user,student.campus,correct=True):
             raise PermissionDenied("Attendance corrections are not authorised for this campus.")
         from zoneinfo import ZoneInfo
-        session=request.data.get("session_type"); day=parse_date(request.data.get("attendance_date", "")) or timezone.localtime(timezone.now(),ZoneInfo(student.campus.timezone)).date()
+        session=request.data.get("session_type")
+        raw_day=request.data.get("attendance_date", "")
+        day=parse_date(raw_day) if raw_day else None
+        if raw_day and day is None: raise ValidationError({"attendance_date":"Use YYYY-MM-DD."})
+        day=day or timezone.localtime(timezone.now(),ZoneInfo(student.campus.timezone)).date()
         if day > timezone.localtime(timezone.now(),ZoneInfo(student.campus.timezone)).date(): raise ValidationError({"attendance_date":"Future attendance dates are not allowed."})
         if session not in DEFAULT_SCHEDULES or new_status not in AttendanceLog.Status.values: raise ValidationError("Choose a valid session and status.")
         schedule=schedule_for(student.campus,session)
@@ -557,12 +569,19 @@ class LocationOverrideView(APIView):
         campus=scoped_campus(request.user,request.data.get("campus_id"),correct=True)
         if campus.pk!=student.campus_id: raise PermissionDenied("Students may only be checked in at their assigned campus.")
         from zoneinfo import ZoneInfo
-        session=request.data.get("session_type"); day=parse_date(request.data.get("attendance_date", "")) or timezone.localtime(timezone.now(),ZoneInfo(student.campus.timezone)).date()
+        session=request.data.get("session_type")
         if session not in DEFAULT_SCHEDULES: raise ValidationError({"session_type":"Choose morning, afternoon or evening."})
         schedule=schedule_for(campus,session)
         now=timezone.now(); local=timezone.localtime(now,ZoneInfo(campus.timezone))
-        failed=AuditLog.objects.filter(actor=student.user,campus=campus,action="attendance.location_rejected",created_at__gte=now-timedelta(minutes=15),details__result=original).exists()
-        if not failed: raise ValidationError({"original_location_result":"No matching recent location failure was found for this student and campus."})
+        raw_day=request.data.get("attendance_date", "")
+        day=parse_date(raw_day) if raw_day else None
+        if raw_day and day is None: raise ValidationError({"attendance_date":"Use YYYY-MM-DD."})
+        day=day or local.date()
+        if day != local.date(): raise ValidationError({"attendance_date":"Location overrides can only record attendance for today."})
+        if MonthlyReport.objects.filter(campus=campus,year=day.year,month=day.month,closed=True).exists():
+            raise ValidationError({"attendance_date":"This month's report is closed. An administrator must reopen it before a correction."})
+        failed=AuditLog.objects.filter(actor=student.user,campus=campus,action="attendance.location_rejected",created_at__gte=now-timedelta(minutes=15),details__result=original,details__session_type=session).exists()
+        if not failed: raise ValidationError({"original_location_result":"No matching recent location failure was found for this student, campus and session."})
         if local.timetz().replace(tzinfo=None)<schedule.start_time or local.timetz().replace(tzinfo=None)>=schedule.close_time: raise ValidationError({"code":"outside_session_window","detail":"Session is outside its configured attendance window."})
         status_value=status_for_attendance_time(schedule,local)
         try:
@@ -598,6 +617,8 @@ class MonthlyCloseView(APIView):
     def post(self,request):
         campus=scoped_campus(request.user,request.data.get("campus_id"))
         if request.user.role not in (User.Role.SUPER_ADMIN,User.Role.CAMPUS_ADMIN) and not request.user.is_superuser: raise PermissionDenied("Monthly report closure requires administrator access.")
+        if request.user.role == User.Role.CAMPUS_ADMIN and request.user.assigned_campus_id != campus.pk:
+            raise PermissionDenied("Campus administrators may only close reports for their assigned campus.")
         from zoneinfo import ZoneInfo
         today=timezone.localtime(timezone.now(),ZoneInfo(campus.timezone)).date()
         latest_year,latest_month=(today.year,today.month-1) if today.month>1 else (today.year-1,12)

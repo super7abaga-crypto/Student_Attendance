@@ -31,12 +31,13 @@ class QRValidationError(ValueError):
 
 
 class ScanLocationError(PermissionError):
-    def __init__(self, code, message=LOCATION_DENIED, *, result="", accuracy=None, distance=None):
+    def __init__(self, code, message=LOCATION_DENIED, *, result="", accuracy=None, distance=None, session_type=None):
         super().__init__(message)
         self.code = code
         self.result = result
         self.accuracy = accuracy
         self.distance = distance
+        self.session_type = session_type
 
 
 def audit(actor, action, *, campus=None, obj=None, details=None, reason="", request=None):
@@ -192,7 +193,7 @@ def record_scan(*, student, token, latitude, longitude, accuracy, at=None, reque
             "outside_geofence": "wrong_campus",
             "campus_location_unconfigured": "location_unconfigured",
         }.get(location_result, "gps_required")
-        raise ScanLocationError(code,result=location_result,accuracy=accuracy,distance=distance)
+        raise ScanLocationError(code,result=location_result,accuracy=accuracy,distance=distance,session_type=run.session_type)
     schedule = schedule_for(student.campus, run.session_type)
     local_now = timezone.localtime(now, timezone=ZoneInfo(student.campus.timezone))
     status = status_for_attendance_time(schedule, local_now)

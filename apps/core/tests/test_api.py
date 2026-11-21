@@ -6,7 +6,8 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework.authtoken.models import Token
-from apps.core.models import AuditLog, Campus, MonthlyReport, SessionRun, SessionSchedule, Student, User
+from apps.core.models import AuditLog, Campus, MentorCampusAccess, MonthlyReport, SessionRun, SessionSchedule, Student, User
+from apps.core.serializers import CampusSerializer, ScheduleSerializer
 from apps.core.services import mint_qr
 
 
@@ -121,6 +122,76 @@ class AttendanceAPITests(TestCase):
         response=self.client.post("/api/v1/auth/student/login/",{"username":"ada","password":"long-password-for-tests"},format="json")
         self.assertEqual(response.status_code,200)
         self.assertNotEqual(response.data["token"],token.key)
+
+    def test_campus_location_requires_a_valid_coordinate_pair(self):
+        partial=CampusSerializer(data={"name":"Partial Campus","latitude":"6.500000"})
+        self.assertFalse(partial.is_valid())
+        out_of_range=CampusSerializer(data={"name":"Invalid Campus","latitude":"91.000000","longitude":"0.000000"})
+        self.assertFalse(out_of_range.is_valid())
+
+    def test_schedule_rejects_a_cutoff_outside_the_open_window(self):
+        serializer=ScheduleSerializer(data={
+            "campus":str(self.campus.pk),"session_type":"morning",
+            "start_time":"09:00","late_after":"12:00","close_time":"12:00",
+        })
+        self.assertFalse(serializer.is_valid())
+
+    def test_mentor_with_manage_permission_can_deactivate_roster_student(self):
+        mentor=User.objects.create_user(username="roster-manager",password="a-very-long-mentor-password",role=User.Role.MENTOR)
+        MentorCampusAccess.objects.create(user=mentor,campus=self.campus,can_manage_students=True)
+        self.client.force_authenticate(user=mentor)
+        response=self.client.post(f"/api/v1/admin/students/{self.student.pk}/deactivate/",{},format="json")
+        self.assertEqual(response.status_code,200)
+        self.student.refresh_from_db()
+        self.assertFalse(self.student.active)
+
+    def test_mentor_without_manage_permission_cannot_deactivate_roster_student(self):
+        mentor=User.objects.create_user(username="roster-reader",password="a-very-long-mentor-password",role=User.Role.MENTOR)
+        MentorCampusAccess.objects.create(user=mentor,campus=self.campus,can_manage_students=False)
+        self.client.force_authenticate(user=mentor)
+        response=self.client.post(f"/api/v1/admin/students/{self.student.pk}/deactivate/",{},format="json")
+        self.assertEqual(response.status_code,403)
+
+    def test_location_override_rejects_non_today_attendance_date(self):
+        mentor=User.objects.create_user(username="location-mentor",password="a-very-long-mentor-password",role=User.Role.MENTOR)
+        MentorCampusAccess.objects.create(user=mentor,campus=self.campus,can_correct_attendance=True)
+        self.client.force_authenticate(user=mentor)
+        today=timezone.localtime(timezone.now(),ZoneInfo(self.campus.timezone)).date()
+        response=self.client.post("/api/v1/mentor/attendance/location-override/",{
+            "student_id":str(self.student.pk),"campus_id":str(self.campus.pk),"session_type":"morning",
+            "attendance_date":(today+timedelta(days=1)).isoformat(),"original_location_result":"outside_geofence","reason":"Approved review",
+        },format="json")
+        self.assertEqual(response.status_code,400)
+        self.assertIn("Location overrides can only record attendance for today.",str(response.data["attendance_date"]))
+
+    def test_location_override_cannot_change_a_closed_month(self):
+        mentor=User.objects.create_user(username="location-archived-mentor",password="a-very-long-mentor-password",role=User.Role.MENTOR)
+        MentorCampusAccess.objects.create(user=mentor,campus=self.campus,can_correct_attendance=True)
+        self.client.force_authenticate(user=mentor)
+        today=timezone.localtime(timezone.now(),ZoneInfo(self.campus.timezone)).date()
+        MonthlyReport.objects.create(campus=self.campus,year=today.year,month=today.month,closed=True)
+        response=self.client.post("/api/v1/mentor/attendance/location-override/",{
+            "student_id":str(self.student.pk),"campus_id":str(self.campus.pk),"session_type":"morning",
+            "attendance_date":today.isoformat(),"original_location_result":"outside_geofence","reason":"Approved review",
+        },format="json")
+        self.assertEqual(response.status_code,400)
+        self.assertIn("report is closed",str(response.data["attendance_date"]))
+
+    def test_location_override_cannot_reuse_a_failure_from_another_session(self):
+        mentor=User.objects.create_user(username="location-mentor2",password="a-very-long-mentor-password",role=User.Role.MENTOR)
+        MentorCampusAccess.objects.create(user=mentor,campus=self.campus,can_correct_attendance=True)
+        self.client.force_authenticate(user=mentor)
+        now=timezone.make_aware(datetime.combine(timezone.localdate(),time(9,5)),ZoneInfo(self.campus.timezone))
+        AuditLog.objects.create(actor=self.user,campus=self.campus,action="attendance.location_rejected",
+            details={"result":"outside_geofence","session_type":"afternoon"})
+        AuditLog.objects.filter(actor=self.user,action="attendance.location_rejected").update(created_at=now)
+        with patch("apps.core.views.timezone.now",return_value=now):
+            response=self.client.post("/api/v1/mentor/attendance/location-override/",{
+                "student_id":str(self.student.pk),"campus_id":str(self.campus.pk),"session_type":"morning",
+                "attendance_date":now.date().isoformat(),"original_location_result":"outside_geofence","reason":"Approved review",
+            },format="json")
+        self.assertEqual(response.status_code,400)
+        self.assertIn("campus and session",str(response.data["original_location_result"]))
 
     def test_mentor_session_is_individual_and_csrf_protected(self):
         mentor=User.objects.create_user(username="mentor1",password="a-very-long-mentor-password",role=User.Role.CAMPUS_ADMIN,assigned_campus=self.campus,display_name="Mentor One")

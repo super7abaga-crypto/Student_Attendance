@@ -1,5 +1,6 @@
 import uuid
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -16,6 +17,22 @@ class Campus(models.Model):
     contact_phone = models.CharField(max_length=32, blank=True)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self):
+        super().clean()
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, TypeError):
+            raise ValidationError({"timezone": "Use a valid IANA timezone, such as Africa/Lagos."})
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValidationError({"latitude": "Set both latitude and longitude, or leave both blank."})
+        if self.latitude is not None and not -90 <= self.latitude <= 90:
+            raise ValidationError({"latitude": "Latitude must be between -90 and 90."})
+        if self.longitude is not None and not -180 <= self.longitude <= 180:
+            raise ValidationError({"longitude": "Longitude must be between -180 and 180."})
+        if self.geofence_radius_m is not None and not 20 <= self.geofence_radius_m <= 2000:
+            raise ValidationError({"geofence_radius_m": "Geofence radius must be between 20 and 2,000 metres."})
 
     class Meta:
         ordering = ["name"]
@@ -136,6 +153,15 @@ class SessionSchedule(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["campus", "session_type"], name="uniq_schedule_campus_session")]
+
+    def clean(self):
+        super().clean()
+        if self.start_time is None or self.late_after is None or self.close_time is None:
+            return
+        if self.start_time >= self.close_time:
+            raise ValidationError({"close_time": "Session close must be later than its start."})
+        if not self.start_time <= self.late_after < self.close_time:
+            raise ValidationError({"late_after": "The last on-time minute must be within the session window."})
 
 
 class SessionRun(models.Model):

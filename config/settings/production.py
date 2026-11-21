@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlparse
 from .base import *  # noqa: F403
 
 DEBUG = False
@@ -15,9 +16,14 @@ if not ALLOWED_HOSTS:
     raise RuntimeError("DJANGO_ALLOWED_HOSTS must contain the production host.")
 if all(host in {"localhost", "127.0.0.1", "testserver"} for host in ALLOWED_HOSTS):
     raise RuntimeError("DJANGO_ALLOWED_HOSTS must include the deployed attendance hostname.")
-REDIS_URL = os.environ.get("REDIS_URL", CELERY_BROKER_URL)
-if not REDIS_URL:
-    raise RuntimeError("Configure REDIS_URL for shared production cache and rate limiting.")
+REDIS_URL = os.environ.get("REDIS_URL") or os.environ.get("CELERY_BROKER_URL", "")
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL") or REDIS_URL
+for name, value in (("REDIS_URL", REDIS_URL), ("CELERY_BROKER_URL", CELERY_BROKER_URL)):
+    parsed = urlparse(value)
+    if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+        raise RuntimeError(f"Configure {name} with a production Redis service URL.")
+    if parsed.hostname.lower() in {"localhost", "127.0.0.1", "::1"}:
+        raise RuntimeError(f"{name} must not point to localhost in production.")
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": REDIS_URL}}
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True

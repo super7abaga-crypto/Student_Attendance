@@ -36,13 +36,19 @@ class AttendanceServiceTests(TestCase):
 
     def test_cutoffs_apply_to_all_three_sessions(self):
         for kind,hour in (("morning",9),("afternoon",13),("evening",17)):
-            at=timezone.make_aware(datetime.combine(timezone.localdate(),time(hour,10)),ZoneInfo("Africa/Lagos"))
-            token,_=self.token_at(kind,at)
-            extra_user=User.objects.create_user(username=f"boundary-{kind}",password="correct-horse-battery-staple",first_name="Boundary",role=User.Role.STUDENT,assigned_campus=self.campus)
-            extra_student=Student.objects.create(user=extra_user,campus=self.campus)
-            row=record_scan(student=extra_student,token=token,latitude=6.5244,longitude=3.3792,accuracy=10,at=at)
-            self.assertEqual(row.status,AttendanceLog.Status.PRESENT)
-            self.assertEqual(row.attendance_action,"check_in")
+            for minute,second,microsecond,expected in (
+                (10,0,0,AttendanceLog.Status.PRESENT),
+                (10,59,999999,AttendanceLog.Status.PRESENT),
+                (11,0,0,AttendanceLog.Status.LATE),
+            ):
+                at=timezone.make_aware(datetime.combine(timezone.localdate(),time(hour,minute,second,microsecond)),ZoneInfo("Africa/Lagos"))
+                token,_=self.token_at(kind,at)
+                username=f"boundary-{kind}-{minute}-{second}-{microsecond}"
+                extra_user=User.objects.create_user(username=username,password="correct-horse-battery-staple",first_name="Boundary",role=User.Role.STUDENT,assigned_campus=self.campus)
+                extra_student=Student.objects.create(user=extra_user,campus=self.campus)
+                row=record_scan(student=extra_student,token=token,latitude=6.5244,longitude=3.3792,accuracy=10,at=at)
+                self.assertEqual(row.status,expected)
+                self.assertEqual(row.attendance_action,"check_in")
 
     def test_eleven_minutes_past_each_cutoff_is_late(self):
         for kind,hour in (("morning",9),("afternoon",13),("evening",17)):

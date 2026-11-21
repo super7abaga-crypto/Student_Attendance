@@ -8,7 +8,7 @@
 - Gunicorn behind a reverse proxy that terminates HTTPS.
 - Persistent private backups for PostgreSQL.
 
-Set all values in `.env.example` in the deployment secret store. Use a random `DJANGO_SECRET_KEY` (50+ characters) and a separate `ATTENDANCE_SECRET` (48+ characters); do not reuse the sample strings. Configure `DJANGO_ALLOWED_HOSTS=fellowship.learn2earn.ng`, HTTPS `CSRF_TRUSTED_ORIGINS`, and only approved CORS origins. For PostgreSQL use `DB_SSLMODE=require` when supported. Keep `DEBUG=0` in production.
+Set all values in `.env.example` in the deployment secret store. Use a random `DJANGO_SECRET_KEY` (50+ characters) and a separate `ATTENDANCE_SECRET` (48+ characters); do not reuse the sample strings. Configure `DJANGO_ALLOWED_HOSTS=fellowship.learn2earn.ng`, HTTPS `CSRF_TRUSTED_ORIGINS`, and only approved CORS origins. Set both `REDIS_URL` and `CELERY_BROKER_URL` to managed Redis service URLs (they may be the same URL); production rejects empty and localhost Redis settings. For PostgreSQL use `DB_SSLMODE=require` when supported. Keep `DEBUG=0` in production.
 
 Apply migrations during a release step, then collect static assets and start the WSGI application:
 
