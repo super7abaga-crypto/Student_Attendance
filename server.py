@@ -591,7 +591,6 @@ def main() -> None:
     print("\n  LEARN 2EARN dev server (Python)", flush=True)
     print(f"  Portal : http://localhost:{PORT}", flush=True)
     print(f"  API    : http://localhost:{PORT}/api/v1", flush=True)
-    print(f"  Kiosk  : http://localhost:{PORT}/dev/kiosk.html  (live test QR)", flush=True)
     print("  Demo   : demo_student / demo12345", flush=True)
     if ALLOW_FOREIGN_QR:
         print("  Note   : ALLOW_FOREIGN_QR=1 - unverified codes from another issuer are accepted\n", flush=True)

@@ -35,4 +35,4 @@ Not verified in a live deployment. No live HTTPS URL, production or staging cred
 
 ## Kiosk reference audit
 
-The Django backend routes the kiosk through `/api/v1/mentor/qr/*`. No `dev/kiosk.html` reference exists in the current workspace backend. The legacy `server.py` on the remote `main` branch still prints a `http://localhost:<port>/dev/kiosk.html` URL, even though that file is absent from this workspace source copy. That legacy reference must be removed or corrected when the Engineer B branch is based on the current remote `main` tree.
+The Django backend routes the mentor kiosk through `/api/v1/mentor/qr/*`. Removed the legacy `server.py` startup-banner pointer to `/dev/kiosk.html`; the Django portal at `/` is the mentor entry point. The old `dev/kiosk.html` file is still explicitly labeled DEV ONLY and says it must never be deployed. It is not the Django kiosk and has not been used as evidence of live kiosk behavior.
