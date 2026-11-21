@@ -28,7 +28,7 @@ from .serializers import (AttendanceSerializer, CampusSerializer, ScheduleSerial
                           StudentCreateSerializer, StudentSerializer, APIResponseSerializer)
 from .services import (DEFAULT_SCHEDULES, accessible_campuses, attended_sessions, audit, csv_safe, manual_adjustment,
                        mint_qr, report_for, schedule_for, summary_for, user_can_access, user_can_export,
-                       verify_qr, record_scan, QRValidationError, ScanLocationError)
+                       verify_qr, record_scan, QRValidationError, ScanLocationError, status_for_attendance_time)
 
 
 def scoped_campus(user, campus_id, *, correct=False):
@@ -564,7 +564,7 @@ class LocationOverrideView(APIView):
         failed=AuditLog.objects.filter(actor=student.user,campus=campus,action="attendance.location_rejected",created_at__gte=now-timedelta(minutes=15),details__result=original).exists()
         if not failed: raise ValidationError({"original_location_result":"No matching recent location failure was found for this student and campus."})
         if local.timetz().replace(tzinfo=None)<schedule.start_time or local.timetz().replace(tzinfo=None)>=schedule.close_time: raise ValidationError({"code":"outside_session_window","detail":"Session is outside its configured attendance window."})
-        status_value=AttendanceLog.Status.PRESENT if local.timetz().replace(tzinfo=None)<=schedule.late_after else AttendanceLog.Status.LATE
+        status_value=status_for_attendance_time(schedule,local)
         try:
             with transaction.atomic():
                 log=AttendanceLog.objects.create(student=student,campus=campus,track_name=student.track.name if student.track_id else "",cohort_name=student.cohort.name if student.cohort_id else "",session_type=session,attendance_action="check_in",attendance_date=day,scanned_at=now,status=status_value,source=AttendanceLog.Source.MANUAL,location_verified=False,location_result="manual_override")

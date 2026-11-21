@@ -53,6 +53,17 @@ def schedule_for(campus, session_type):
     return row
 
 
+def status_for_attendance_time(schedule, local_now):
+    """Keep the configured cutoff minute on time; lateness starts next minute.
+
+    For example, a ``late_after`` value of 09:10 means scans through
+    09:10:59.999999 are present and scans from 09:11:00 are late.
+    """
+    scan_time = local_now.replace(tzinfo=None)
+    late_starts_at = datetime.combine(scan_time.date(), schedule.late_after) + timedelta(minutes=1)
+    return AttendanceLog.Status.PRESENT if scan_time < late_starts_at else AttendanceLog.Status.LATE
+
+
 def user_can_access(user, campus, *, manage=False, correct=False):
     if not user.is_authenticated or not user.is_active:
         return False
@@ -184,9 +195,7 @@ def record_scan(*, student, token, latitude, longitude, accuracy, at=None, reque
         raise ScanLocationError(code,result=location_result,accuracy=accuracy,distance=distance)
     schedule = schedule_for(student.campus, run.session_type)
     local_now = timezone.localtime(now, timezone=ZoneInfo(student.campus.timezone))
-    # The cutoff minute is inclusive: 09:10, 13:10 and 17:10 are Present;
-    # 09:11, 13:11 and 17:11 onward are Late.
-    status = AttendanceLog.Status.PRESENT if local_now.timetz().replace(tzinfo=None) <= schedule.late_after else AttendanceLog.Status.LATE
+    status = status_for_attendance_time(schedule, local_now)
     try:
         with transaction.atomic():
             log = AttendanceLog.objects.create(student=student, campus=student.campus,

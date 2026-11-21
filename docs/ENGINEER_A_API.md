@@ -8,13 +8,13 @@ This document describes the checked-in Django implementation. API paths below ar
 
 QR sessions remain separate operating windows. The defaults are:
 
-| Session | Opens | `late_after` inclusive | Closes (exclusive) | Action |
-|---|---:|---:|---:|---|
-| `morning` | 09:00 | 09:10 | 12:00 | `check_in` |
-| `afternoon` | 13:00 | 13:10 | 16:00 | `check_in` |
-| `evening` | 17:00 | 17:10 | 20:00 | `check_in` |
+| Session | Opens | Last on-time minute (`late_after`) | Late starts | Closes (exclusive) | Action |
+|---|---:|---:|---:|---:|---|
+| `morning` | 09:00 | 09:10 | 09:11 | 12:00 | `check_in` |
+| `afternoon` | 13:00 | 13:10 | 13:11 | 16:00 | `check_in` |
+| `evening` | 17:00 | 17:10 | 17:11 | 20:00 | `check_in` |
 
-The configured `late_after` minute is **on time inclusive**: a scan at exactly 09:10:00, 13:10:00, or 17:10:00 is `present`; a scan after that instant is `late` (including 09:10:01). A scan before the session opens or at/after close is rejected as `session_inactive`. Campus schedules can override the defaults.
+The configured `late_after` minute is on time for the **whole minute**. For example, with `late_after=09:10`, scans through 09:10:59.999999 WAT are `present`; scans from 09:11:00 WAT are `late`. The same rule applies at 13:11 and 17:11. A scan before the session opens or at/after close is rejected as `session_inactive`. Campus schedules can override the defaults; `late_after` means the last on-time minute.
 
 A successful scan in any one window creates the day's attendance row and stores the window's `session_type`. A successful scan in another window that same date is rejected by the daily unique constraint. The evening window does not represent a separate checkout record in the current database policy. For an active student registered on or before a date with no row, a single `absent` row is materialized after the evening window closes; system-created absences use `session_type: "evening"` and `attendance_action: "check_in"`.
 

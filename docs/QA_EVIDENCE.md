@@ -27,6 +27,12 @@ Results:
 - GPS/geofence coverage checks outside-campus rejection, low-accuracy rejection, and failed closed behavior.
 - Permission coverage checks student identity/authentication, mentor session and CSRF, and staff/campus access restrictions.
 
+The results above predate the exact-second cutoff correction that keeps the full configured
+`late_after` minute on time and starts lateness at the following minute (09:11:00, 13:11:00,
+and 17:11:00 WAT). The suite has not been rerun after that code change, so these results do
+not verify the updated boundary. Re-run the full commands above and add second-level boundary
+coverage before treating this policy change as QA-approved.
+
 The Django test runner emits expected HTTP 400/401/403/409/404 log lines for rejection cases; these are asserted cases, not test failures.
 
 ## Manual QA and deployment evidence
