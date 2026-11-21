@@ -1,0 +1,7 @@
+{
+  "name": "learn2earn-attendance",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Learn2Earn Django attendance portal launcher",
+  "scripts": { "start": "python manage.py runserver", "dev": "python manage.py runserver" }
+}

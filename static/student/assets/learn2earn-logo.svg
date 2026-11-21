@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="182" height="70" viewBox="0 0 182 70" role="img" aria-labelledby="title">
+  <title id="title">Learn2Earn</title>
+  <g fill="#078fd3" transform="translate(25 7) scale(.62 .9)">
+    <path d="M25 5 0 32l25 27V43L11 32 25 21z"/>
+    <path d="M68 5 93 32 68 59V43l14-11-14-11z"/>
+    <path d="M30 5h12v54H30zM46 5h12v54H46z"/>
+  </g>
+  <g fill="#241228" font-family="Arial,Helvetica,sans-serif" font-weight="800" letter-spacing="-1.4" transform="translate(15 0) scale(.75 1)">
+    <text x="106" y="29" font-size="27">LEARN</text>
+    <text x="106" y="55" font-size="27">2EARN</text>
+  </g>
+</svg>
