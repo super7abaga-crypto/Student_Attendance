@@ -224,12 +224,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-
-# Learn2Earn student portal
-.DS_Store
-Thumbs.db
-.env
-.env.*
-!.env.example
-dev/.data.json
-.vscode/*.log
