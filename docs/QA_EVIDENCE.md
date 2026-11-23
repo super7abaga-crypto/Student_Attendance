@@ -5,7 +5,7 @@ Date: 23 November 2026 (Africa/Lagos)
 Branch: `feat/engineer-b-attendance`
 Workspace verification only; no staging or production environment was accessed.
 
-The checkpoint implementation and tests have since changed. The suite result below was recorded before the final manual-checkout validation and documentation edits, so it is historical evidence and must be rerun before a release review.
+The results below include verification of commit `7a0ecef` and the subsequent fixes for legacy mentor hash storage and checkpoint-aware legacy imports. The current test run used SQLite; PostgreSQL-specific confirmation is still required.
 
 ## Automated verification
 
@@ -22,13 +22,15 @@ git diff --check
 
 Results:
 
-- pytest: **46 passed, 1 skipped**.
-- Django test runner: the most recent earlier run recorded **52 tests passed, 1 skipped**; the test database was destroyed afterward. This run predates the final working-tree edits noted above.
-- Django system check: no issues.
-- Migration check: no model changes detected.
+- Django test runner: `python manage.py test apps.core.tests --verbosity 1` — **54 tests run, 1 skipped, 0 failures**; the skip is the PostgreSQL concurrency test. The test database was destroyed afterward.
+- Django system check: `python manage.py check` — no issues.
+- Migration check: `python manage.py makemigrations --check --dry-run` — no model changes detected.
+- `git diff --check` — clean.
+- `python -m pytest -q` and `collectstatic --dry-run` results below are from an earlier verification run and were not repeated after these changes.
 - Static collection dry run: 160 static files found and ready for collection.
-- `git diff --check`: clean.
 - The PostgreSQL concurrency test is present but skipped on this workspace's SQLite database because SQLite's locking behavior does not validate the production race. Run it against PostgreSQL in staging before approval.
+- A legacy mentor-import test now asserts the full scrypt encoding exceeds the old 128-character limit; widening is covered by migration 0007. The test passed on SQLite, but PostgreSQL confirmation remains outstanding.
+- Legacy attendance import coverage confirms three different checkpoints on one date are retained and a duplicate for the same checkpoint is skipped.
 
 ## Specific release checks
 
@@ -37,7 +39,7 @@ Results:
 - Login and QR scan rate-limit tests verify HTTP 429 enforcement.
 - CSV test verifies export headers/content and apostrophe escaping for spreadsheet formulas. It also caught and fixed DRF treating `format=csv` as a renderer override (previously 404).
 - Migration tests verify the 0004 historical-status conversion, retained rows, and duplicate-date abort behavior. No populated external database was used.
-- Checkpoint tests were updated to cover separate morning/afternoon/evening records, checkout semantics, checkpoint-specific duplicates, and absence materialization. They have not been rerun against the final working tree yet.
+- Checkpoint tests cover separate morning/afternoon/evening records, checkout semantics, checkpoint-specific duplicates, and absence materialization.
 
 ## Deployment and staging evidence
 

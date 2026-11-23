@@ -53,4 +53,4 @@ Expected results: `/health/` returns `{"ok":true,"service":"learn2earn-attendanc
 5. Export a CSV containing a synthetic formula-like name and confirm spreadsheet-dangerous values are prefixed with an apostrophe.
 6. Record the staging URL, `/health/` response, API smoke results, migration state, static-file response, worker ping, Beat logs, and test results in `docs/DEPLOYMENT_STATUS.md`.
 
-Do not test geofencing until campus coordinates have been verified. Do not describe staging evidence as proof of production readiness. Production remains blocked on selected hosting, approved campus configuration, migration 0004 and 0006 review/approval, production secrets, backup/restore evidence, and live production verification.
+Do not test geofencing until campus coordinates have been verified. Do not describe staging evidence as proof of production readiness. Production remains blocked on selected hosting, approved campus configuration, migrations 0004, 0006, and 0007 review/approval, production secrets, backup/restore evidence, and live production verification.

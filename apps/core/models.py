@@ -3,6 +3,7 @@ from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 
 
 class Campus(models.Model):
@@ -71,6 +72,10 @@ class Cohort(models.Model):
 
 
 class User(AbstractUser):
+    # Legacy Node scrypt hashes contain a 128-character hex digest plus metadata.
+    # Keep the full value during migration; successful login upgrades it to Argon2.
+    password = models.CharField(_("password"), max_length=512)
+
     class Role(models.TextChoices):
         SUPER_ADMIN = "super_admin", "Super Administrator"
         CAMPUS_ADMIN = "campus_admin", "Campus Administrator"

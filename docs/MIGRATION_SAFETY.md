@@ -92,3 +92,9 @@ HAVING COUNT(*) > 1;
 ```
 
 Back up with the same encrypted `pg_dump` procedure above and rehearse migration on an isolated restored copy. Compare total attendance row counts, primary keys, status values and historical session/action values before and after. After deploying this version, a single day can contain up to three system-generated absence rows (one per missed checkpoint), alongside scans for checkpoints completed. Therefore, rollback to code/schema enforcing one row per date may fail once a second checkpoint has been written. If rollback is required after checkpoint data exists, restore the verified pre-migration backup into an isolated database and follow the release owner's recovery plan; do not delete records to force a downgrade. No production database migration was run or authorized here.
+
+## Migration 0007 legacy password capacity
+
+Migration `0007_alter_user_password` increases `core_user.password` from 128 to 512 characters. The legacy Node scrypt encoding contains a 128-character hexadecimal digest plus algorithm metadata, so the old column could reject it on PostgreSQL. The migration widens the column and preserves existing values; it does not truncate or rewrite hashes. On first successful login, the legacy hasher upgrades the password to the configured modern Django hasher.
+
+Verify the migration on an isolated database and run `apps.core.tests.test_security.SecurityTests.test_legacy_import_preserves_sources_and_upgrades_legacy_mentor_hash` on PostgreSQL. SQLite does not enforce a VARCHAR length limit, so the SQLite test alone does not demonstrate this PostgreSQL fix. Include migration 0007 in the backup/restore rehearsal and approval before applying migrations to a populated production database.
