@@ -16,7 +16,7 @@ The defaults are:
 | `afternoon` | 13:00 | 13:10 | 13:11 | 16:00 | `check_in` |
 | `evening` | 17:00 | N/A | N/A | 20:00 | `check_out` |
 
-Morning and afternoon scans through the full 09:10/13:10 minute are `present`; lateness starts at 09:11/13:11. Evening checkout records the timestamp and is not marked late. A scan before a checkpoint opens or at/after its close is rejected as `session_inactive`. Campus schedules can override these windows.
+Morning and afternoon scans through the full 09:10/13:10 minute are `present`; lateness starts at 09:11/13:11. For example, 09:10:59 is present and 09:11:00 is late under the default morning schedule. This follows the project decision that lateness starts at 9:11, not at the beginning of the 9:10 minute. Evening checkout records the timestamp and is not marked late. A scan before a checkpoint opens or at/after its close is rejected as `session_inactive`. Campus schedules can override these windows.
 
 After each checkpoint closes, the scheduled task creates an `absent` row when an enrolled student has no record for that checkpoint. The mentor summary counts a day as `present` when all three checkpoints are complete on time, `late` when all three are complete and a check-in was late, `incomplete` when there is some attendance but a checkpoint is missing, and `absent` when neither check-in was recorded after both check-in windows have closed. `pending` represents a day that is not yet complete and has no attendance evidence. Mentors can correct individual checkpoint records through the audited workflow.
 
