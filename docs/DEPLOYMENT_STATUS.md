@@ -7,12 +7,12 @@
 | Requirement | Status | Evidence / action required |
 |---|---|---|
 | Live HTTPS URL | **Not supplied** | Record the deployed student and mentor portal URL after deployment. |
-| `GET /health/` | Implemented locally; live check **pending** | The view returns exactly `{ "ok": true, "service": "learn2earn-attendance", "timezone": "Africa/Lagos" }`. Capture the actual HTTPS response and time. |
+| `GET /health/` | Implemented locally; live check **pending** | The view checks database connectivity and returns `{ "ok": true, "service": "learn2earn-attendance", "database": "ok" }` (or HTTP 503 with `database: unavailable`). Capture the actual HTTPS response and time. |
 | Working API endpoints | Local automated API coverage passes; live check **pending** | Run the student auth/profile/history/scan and mentor auth/QR/attendance/summary flows against the deployed service. Swagger: `/api/v1/docs/`; schema: `/api/v1/schema/`. |
 | PostgreSQL connected | **Not configured/verified** | Set `DATABASE_URL` in the deployment secret store. Run the approved migration process and capture a redacted connection/deploy log and `showmigrations` output. Local development/tests use SQLite unless `DATABASE_URL` is set. |
 | Migrations applied | Local test DB applies migrations; target DB **pending** | Review and approve migration 0004 using `MIGRATION_SAFETY.md`; run it only on staging first and then on production after explicit release approval. |
 | Redis and Celery worker | **Not supplied** | Configure the Redis broker and worker service, capture healthy startup and successful task execution. |
-| Celery Beat | **Not supplied** | Verify daily absence closure at 20:01 and monthly report close at 00:15 on day 1 in the configured campus timezone (`Africa/Lagos` for WAT pilot). Capture Beat schedule and execution evidence. |
+| Celery Beat | **Not supplied** | Verify the UTC 15-minute daily absence check and daily 01:15 UTC monthly close task. Capture Beat schedule and task execution evidence; per-campus decisions use each campus's timezone. |
 | Static assets collected | Local discovery works; deployment **pending** | Run `python manage.py collectstatic --noinput`; verify `/static/student/` and mentor CSS/JS return HTTP 200 over HTTPS. |
 | Production secrets | **Not confirmed** | Configure `DJANGO_SECRET_KEY` (random, at least 50 characters), `ATTENDANCE_SECRET` (random, at least 48 characters), database/broker credentials, `REDIS_URL`, `DJANGO_ALLOWED_HOSTS`, CSRF trusted origins, and CORS origins in the deployment secret manager. Do not put secret values in this handoff. |
 | Deployment logs | **Not supplied** | Attach successful build, migration, web startup, worker, Beat, and health-check logs with credentials redacted. |

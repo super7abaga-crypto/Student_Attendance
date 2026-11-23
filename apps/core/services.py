@@ -224,6 +224,17 @@ def materialize_absences(campus, day, now=None):
     """Persist one Absent record for enrolled students with no daily attendance."""
     if not attendance_day_closed(campus, day, now):
         return 0
+    # Serialize concurrent task/API materialization for this campus. The
+    # database uniqueness constraint remains the final protection against a
+    # concurrent scan or writer inserting the same student's daily row.
+    with transaction.atomic():
+        campus = Campus.objects.select_for_update().get(pk=campus.pk)
+        if not attendance_day_closed(campus, day, now):
+            return 0
+        return _materialize_absences_locked(campus, day)
+
+
+def _materialize_absences_locked(campus, day):
     students = Student.objects.filter(campus=campus, active=True, user__is_active=True, registration_date__lte=day)
     existing = set(AttendanceLog.objects.filter(campus=campus, attendance_date=day).values_list("student_id", flat=True))
     missing = [student for student in students if student.pk not in existing]

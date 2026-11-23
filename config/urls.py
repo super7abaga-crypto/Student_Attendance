@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.db import DatabaseError, connection
 from django.urls import include, path
 from django.views.generic import TemplateView
 from django.http import JsonResponse
@@ -6,7 +7,12 @@ from apps.core.frontend import asset, portal
 
 
 def health(_request):
-    return JsonResponse({"ok": True, "service": "learn2earn-attendance", "timezone": "Africa/Lagos"})
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    except DatabaseError:
+        return JsonResponse({"ok": False, "service": "learn2earn-attendance", "database": "unavailable"}, status=503)
+    return JsonResponse({"ok": True, "service": "learn2earn-attendance", "database": "ok"})
 
 
 urlpatterns = [

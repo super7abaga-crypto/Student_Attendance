@@ -65,6 +65,9 @@ REST_FRAMEWORK = {
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend", "rest_framework.filters.SearchFilter", "rest_framework.filters.OrderingFilter"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination", "PAGE_SIZE": 50,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # `format=csv` is an application-level export switch, not a renderer
+    # override; otherwise DRF returns 404 before the CSV view can run.
+    "URL_FORMAT_OVERRIDE": None,
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.AnonRateThrottle", "rest_framework.throttling.UserRateThrottle"],
     "DEFAULT_THROTTLE_RATES": {"anon": "30/min", "user": "120/min", "login": "5/min", "scan": "20/min"},
 }
@@ -81,10 +84,14 @@ X_FRAME_OPTIONS = "DENY"
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
 CELERY_TASK_ALWAYS_EAGER = os.environ.get("CELERY_TASK_ALWAYS_EAGER", "0") == "1"
 from celery.schedules import crontab
-CELERY_TIMEZONE = "Africa/Lagos"
+# Beat is a single global scheduler. Run in UTC and let each task derive its
+# own campus-local date and cutoff from Campus.timezone.
+CELERY_TIMEZONE = "UTC"
 CELERY_BEAT_SCHEDULE = {
-    "daily-attendance-close": {"task": "apps.core.tasks.close_daily_attendance", "schedule": crontab(hour=20, minute=1)},
-    "monthly-attendance-close": {"task": "apps.core.tasks.close_missed_months", "schedule": crontab(day_of_month="1", hour=0, minute=15)},
+    "daily-attendance-close": {"task": "apps.core.tasks.close_daily_attendance", "schedule": crontab(minute="*/15")},
+    # Run daily so campuses whose local month changes before/after UTC do not
+    # wait for a Lagos-only month boundary. The task is idempotent.
+    "monthly-attendance-close": {"task": "apps.core.tasks.close_missed_months", "schedule": crontab(hour=1, minute=15)},
 }
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "attendance@learn2earn.ng")
 LOGGING = {"version": 1, "disable_existing_loggers": False, "handlers": {"console": {"class": "logging.StreamHandler"}}, "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")}}

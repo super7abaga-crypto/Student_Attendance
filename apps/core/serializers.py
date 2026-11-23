@@ -86,10 +86,18 @@ class AttendanceSerializer(serializers.ModelSerializer):
     scan_time_wat = serializers.CharField(read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     source_label = serializers.CharField(source="get_source_display", read_only=True)
+    record_kind = serializers.SerializerMethodField()
+
+    def get_record_kind(self, obj) -> str:
+        if obj.status == AttendanceLog.Status.ABSENT:
+            if obj.location_result == "system_daily_absence":
+                return "system_absence"
+            return "manual_absence"
+        return "attendance"
 
     class Meta:
         model = AttendanceLog
-        fields = ["id", "full_name", "username", "student_id", "campus", "campus_name", "track_name", "cohort_name", "session_type", "attendance_action", "attendance_date", "scanned_at", "scan_time_wat", "status", "status_label", "source", "source_label", "location_verified", "location_accuracy_m", "location_distance_m"]
+        fields = ["id", "full_name", "username", "student_id", "campus", "campus_name", "track_name", "cohort_name", "record_kind", "session_type", "attendance_action", "attendance_date", "scanned_at", "scan_time_wat", "status", "status_label", "source", "source_label", "location_verified", "location_accuracy_m", "location_distance_m"]
 
 
 class StudentCreateSerializer(serializers.Serializer):

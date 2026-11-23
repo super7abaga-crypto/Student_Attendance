@@ -1,8 +1,9 @@
 from celery import shared_task
 from django.utils import timezone
 from zoneinfo import ZoneInfo
+from datetime import timedelta
 from .models import Campus, QRToken
-from .services import close_months_through, materialize_absences
+from .services import close_months_through, materialize_absences, schedule_for
 
 
 @shared_task
@@ -20,10 +21,22 @@ def close_missed_months():
 
 @shared_task
 def close_daily_attendance():
-    """Record final daily absences after the final 5:00 PM attendance window."""
+    """Close only campus-local dates whose final attendance window has ended.
+
+    Beat invokes this every 15 minutes in UTC. Include the prior campus-local
+    day as a bounded catch-up in case Beat was unavailable around midnight;
+    today's date is eligible only after that campus's configured evening close.
+    The database's student/date uniqueness constraint makes repeated runs safe.
+    """
     now = timezone.now()
     recorded = 0
     for campus in Campus.objects.filter(active=True):
-        day = timezone.localtime(now, ZoneInfo(campus.timezone)).date()
-        recorded += materialize_absences(campus, day, now)
+        local_now = timezone.localtime(now, ZoneInfo(campus.timezone))
+        local_day = local_now.date()
+        days_to_close = [local_day - timedelta(days=1)]
+        evening_close = schedule_for(campus, "evening").close_time
+        if local_now.timetz().replace(tzinfo=None) >= evening_close:
+            days_to_close.append(local_day)
+        for day in days_to_close:
+            recorded += materialize_absences(campus, day, now)
     return {"absences_recorded": recorded}

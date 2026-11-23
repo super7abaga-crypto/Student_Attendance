@@ -8,9 +8,9 @@
 - Gunicorn behind a reverse proxy that terminates HTTPS.
 - Persistent private backups for PostgreSQL.
 
-Set all values in `.env.example` in the deployment secret store. Use a random `DJANGO_SECRET_KEY` (50+ characters) and a separate `ATTENDANCE_SECRET` (48+ characters); do not reuse the sample strings. Configure `DJANGO_ALLOWED_HOSTS=fellowship.learn2earn.ng`, HTTPS `CSRF_TRUSTED_ORIGINS`, and only approved CORS origins. Set both `REDIS_URL` and `CELERY_BROKER_URL` to managed Redis service URLs (they may be the same URL); production rejects empty and localhost Redis settings. For PostgreSQL use `DB_SSLMODE=require` when supported. Keep `DEBUG=0` in production.
+Set `DJANGO_SETTINGS_MODULE=config.settings.production` and the values listed in `.env.example` in the host's secret store. Use a random `DJANGO_SECRET_KEY` (50+ characters) and a separate `ATTENDANCE_SECRET` (48+ characters); do not reuse the sample strings. Configure `DJANGO_ALLOWED_HOSTS` for the deployed hostname, HTTPS `CSRF_TRUSTED_ORIGINS`, and only approved CORS origins. Set `DATABASE_URL` to PostgreSQL and `DB_SSLMODE=require` when supported. Set both `REDIS_URL` and `CELERY_BROKER_URL` to managed Redis service URLs (they may be the same URL); production rejects empty and localhost Redis settings. Production settings force `DEBUG=0`.
 
-Apply migrations during a release step, then collect static assets and start the WSGI application:
+For a **new, empty staging database only**, apply migrations and collect static assets:
 
 ```sh
 python manage.py migrate --noinput
@@ -18,16 +18,18 @@ python manage.py collectstatic --noinput
 gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60
 ```
 
-Run background processes separately. Celery Beat records daily Absences at 20:01 Africa/Lagos and closes monthly reports at 00:15 on the first day of a month:
+Start the web and background processes separately. The repository `Procfile` provides web, worker and beat start commands. Equivalent commands are:
 
 ```sh
 celery -A config worker --loglevel=INFO
 celery -A config beat --loglevel=INFO
 ```
 
-Celery Beat records daily Absences at 20:01 Africa/Lagos after the evening window closes. It closes previous reporting periods at 00:15 Africa/Lagos on the first day of each month and processes missing prior months in order. Reports are unique per campus/year/month; source attendance is never deleted. A manual close is available for completed periods only. Reopening a report never erases its audit trail.
+Celery Beat runs in UTC. It checks for daily absences every 15 minutes; the task evaluates each campus's own IANA timezone and evening close. It checks monthly report closure daily at 01:15 UTC so local month boundaries are not tied to Lagos. Absence materialization considers only the prior campus-local day for bounded catch-up and the current local day after its configured close. A database uniqueness constraint on student/date plus campus-row serialization makes repeated runs safe. Monthly reports are unique per campus/year/month; source attendance is never deleted. A manual close is available for completed periods only. Reopening a report never erases its audit trail.
 
-The reverse proxy must redirect HTTP to HTTPS and pass `X-Forwarded-Proto: https`. Health check is `GET /health/`. Swagger is available at `/api/v1/docs/`; protect or disable public schema routes if deployment policy requires it.
+The reverse proxy must redirect HTTP to HTTPS and pass `X-Forwarded-Proto: https`. Configure the host's liveness/readiness path as `GET /health/`. Swagger is available at `/api/v1/docs/`; protect or disable public schema routes if deployment policy requires it. Static files are collected to `STATIC_ROOT` and served by WhiteNoise; verify `/static/student/styles.css` returns HTTP 200 after collection.
+
+The hosting provider has not yet been selected. `Procfile` and these commands are portable process definitions, not a provider-specific Blueprint. Use [the staging checklist](STAGING_CHECKLIST.md) to validate a host before using real data. Never attach this branch's migration command to production auto-release until migration 0004's safety gate has been reviewed and approved.
 
 ## Backups
 

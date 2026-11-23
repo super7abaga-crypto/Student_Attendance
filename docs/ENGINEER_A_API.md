@@ -18,7 +18,9 @@ The configured `late_after` minute is on time for the **whole minute**. For exam
 
 A successful scan in any one window creates the day's attendance row and stores the window's `session_type`. A successful scan in another window that same date is rejected by the daily unique constraint. The evening window does not represent a separate checkout record in the current database policy. For an active student registered on or before a date with no row, a single `absent` row is materialized after the evening window closes; system-created absences use `session_type: "evening"` and `attendance_action: "check_in"`.
 
-Celery Beat runs daily absence closure at 20:01 campus time when configured for `Africa/Lagos`. Requests for a completed day's mentor summary or attendance list and monthly report generation can also materialize missing absences. Monthly report close stores snapshots; it does not delete attendance rows.
+Celery Beat checks for absences every 15 minutes in UTC. The task computes dates and the evening close in each campus's configured timezone. It considers the prior campus-local date as a bounded catch-up and the current campus-local date only after the configured close. The monthly report task runs daily at 01:15 UTC, then derives each campus's preceding local month. Requests for a completed day's mentor summary or attendance list and monthly report generation can also materialize missing absences. Monthly report close stores snapshots; it does not delete attendance rows.
+
+For backward compatibility, a system-generated absence still returns `session_type: "evening"` and `attendance_action: "check_in"`; existing clients may depend on those required enum fields. These values are legacy placeholders. Clients should use `record_kind: "system_absence"` with `status: "absent"` to identify an automatic absence; mentor-entered absences use `record_kind: "manual_absence"`. A future API version can make session/action nullable or replace them with an absence-specific vocabulary after Partner A confirms compatibility.
 
 ## Authentication and permissions
 
@@ -27,6 +29,7 @@ Celery Beat runs daily absence closure at 20:01 campus time when configured for 
 - Authenticated API endpoints use Django REST Framework authentication and permissions. Student-only endpoints verify the authenticated user's role/profile. Staff endpoints allow super-admin, campus-admin, mentor, and attendance-officer roles, then apply campus membership and action-specific permissions. Session start/end and kiosk access are limited to mentors and administrators. Campus schedule changes and monthly close/reopen are limited to administrators for their assigned campus. Student registration and roster changes require `can_manage_students` for that campus (or super-admin / assigned campus-admin access); student read access alone is insufficient. CSV/JSON exports require export permission (administrators are allowed).
 - Campus membership is checked server-side. Attendance officers can read scoped attendance but cannot perform mentor-only session actions or corrections.
 - Student self-registration is not exposed: `POST /auth/student/register/` is a staff-authorized student creation endpoint. Student creation requires an assigned campus and a password of at least 12 characters.
+- Rate limits are 30 anonymous requests/minute, 120 authenticated requests/minute, 5 student/mentor login attempts/minute per IP, and 20 attendance scans/minute per authenticated user. Production uses Redis for the shared cache backing these limits.
 
 ## Student endpoints
 
@@ -61,7 +64,7 @@ Requires student token, QR token (or version-1 QR envelope in `qr_payload`), and
 
 Success (`201`): `{ "success": true, "attendance": <AttendanceSerializer> }`.
 
-The serializer fields are `id`, `full_name`, `username`, `student_id`, `campus`, `campus_name`, `track_name`, `cohort_name`, `session_type`, `attendance_action`, `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `status_label`, `source`, `source_label`, `location_verified`, `location_accuracy_m`, and `location_distance_m`.
+The serializer fields are `id`, `full_name`, `username`, `student_id`, `campus`, `campus_name`, `track_name`, `cohort_name`, `record_kind`, `session_type`, `attendance_action`, `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `status_label`, `source`, `source_label`, `location_verified`, `location_accuracy_m`, and `location_distance_m`. `record_kind` is additive: `attendance` for present/late rows, `system_absence` for generated absences, `manual_absence` for mentor-entered absences.
 
 The server validates signed QR token, 30-second expiry, active session and schedule, assigned campus, GPS accuracy, and geofence. If campus coordinates are missing, scanning fails closed with `403 location_unconfigured`.
 
@@ -105,7 +108,7 @@ Except for public login, these endpoints require staff authentication and campus
 | `GET /mentor/qr/current/?campus_id=<uuid>&session_type=morning` | Mints a signed QR envelope valid for 30 seconds. Response includes `version`, `token`, `expires_at`, `qr_payload`, `qr_image_url`, `session_id`, `campus`, `campus_id`, `session_type`, `attendance_action`, `state`, `expires_in_seconds`. No active session/window is `409 session_closed` or `409 outside_session_window`. |
 | `GET /mentor/qr/image/?token=<signed-token>` | No-store PNG for an authorized staff member with access to the QR's campus. |
 | `POST /mentor/qr/end/` with `{session_id}` | Closes the run and revokes outstanding QR tokens. Unknown run is `404 session_not_found`. |
-| `GET /mentor/attendance/?campus_id=<uuid>[&date=YYYY-MM-DD&date_from=…&date_to=…&status=present|late|absent&session_type=…&source=…&track_name=…&cohort_name=…&search=…]` | Paginated response (`count`, `next`, `previous`, `results`), 50 rows/page. Date-specific calls materialize completed-day absences first. `format=csv` returns protected CSV and requires export permission. |
+| `GET /mentor/attendance/?campus_id=<uuid>[&date=YYYY-MM-DD&date_from=…&date_to=…&status=present|late|absent&session_type=…&source=…&track_name=…&cohort_name=…&search=…]` | Paginated response (`count`, `next`, `previous`, `results`), 50 rows/page. Date-specific calls materialize completed-day absences first. `format=csv` returns protected CSV, requires export permission, and escapes spreadsheet formula values with a leading apostrophe. |
 | `GET /mentor/attendance/summary/?campus_id=<uuid>[&date=YYYY-MM-DD]` | `{campus: <CampusSerializer>, date, timezone, summary: <object>}`. Summary keys: `active_students`, `present`, `late`, `on_time`, `absent`, `not_checked_out`, `attendance_percentage`, `completed_sessions`, `morning_check_ins`, `afternoon_check_ins`, `evening_check_outs`. `on_time` counts `present` rows; current daily mode reports completed session `daily` after evening close and `not_checked_out: 0`. |
 | `POST /mentor/attendance/manual/` | Audited status correction or daily-row creation. A reason is mandatory. The same daily uniqueness applies; duplicate is `409 duplicate_attendance`. |
 | `POST /mentor/attendance/location-override/` | Mentor/admin audited override requires a matching location rejection from the same session within 15 minutes, today's campus-local date, an open monthly report, a reason, and campus correction access. |

@@ -1,43 +1,53 @@
-# QA evidence — Engineer B backend
+# QA evidence — Engineer B release preparation
 
-Date: 21 November 2026 (Africa/Lagos)  
-Workspace: `C:\Users\SummerTek\Student_Attendance`
+Date: 23 November 2026 (Africa/Lagos)
+
+Branch: `feat/engineer-b-attendance`
+Workspace verification only; no staging or production environment was accessed.
 
 ## Automated verification
 
-Commands run from the project root:
+Commands run from the repository root:
 
 ```powershell
+python -m pytest -q
+python manage.py test apps.core.tests -v 1
 python manage.py check
 python manage.py makemigrations --check --dry-run
-python manage.py test apps.core.tests -v 1
-python -m pytest -q
+python manage.py collectstatic --dry-run --noinput
+git diff --check
 ```
 
 Results:
 
-- `manage.py check`: no issues.
-- `makemigrations --check --dry-run`: no model changes detected.
-- Django test runner: **38 tests passed, 0 failures/errors**.
-- pytest: **38 passed**.
-- Migration 0004 is applied by Django when the test database is built. Two dedicated `MigrationExecutor` tests cover historical `on_time` conversion/row retention and duplicate-date abort/row preservation.
-- Daily duplicate coverage verifies the database unique constraint rejects a second scan across QR windows.
-- Cutoff coverage verifies the full last-on-time minute and the 09:11:00, 13:11:00, and 17:11:00 WAT transitions, including the final microsecond before each transition.
-- Absence coverage verifies no absence is generated before close and a missing active student is marked absent after the evening window closes.
-- GPS/geofence coverage checks outside-campus rejection, low-accuracy rejection, and failed closed behavior.
-- Configuration checks reject incomplete/out-of-range campus coordinates and schedules with cutoff times outside the open window.
-- Permission coverage checks student identity/authentication, mentor session and CSRF, student-management grants, and staff/campus access restrictions.
-- Location-override coverage checks that a correction matches the current date and session and cannot change a closed month.
+- pytest: **46 passed, 1 skipped**.
+- Django test runner: **47 tests run, 1 skipped, 0 failures/errors**; the test database was destroyed afterward.
+- Django system check: no issues.
+- Migration check: no model changes detected.
+- Static collection dry run: 160 static files found and ready for collection.
+- `git diff --check`: clean.
+- The PostgreSQL concurrency test is present but skipped on this workspace's SQLite database because SQLite's locking behavior does not validate the production race. Run it against PostgreSQL in staging before approval.
 
-The commands above were run after the cutoff correction and backend hardening changes. They
-verify the current local code, but do not replace live staging or deployment checks.
+## Specific release checks
 
-The Django test runner emits expected HTTP 400/401/403/409/404 log lines for rejection cases; these are asserted cases, not test failures.
+- Timezone task tests cover Lagos and Los Angeles on opposite sides of UTC midnight, local pre-close/post-close behavior, no attendance row for the wrong local date, bounded prior-day catch-up, and repeat-task idempotency.
+- Beat configuration tests cover the 15-minute UTC absence schedule and daily UTC monthly-close schedule.
+- Login and QR scan rate-limit tests verify HTTP 429 enforcement.
+- CSV test verifies export headers/content and apostrophe escaping for spreadsheet formulas. It also caught and fixed DRF treating `format=csv` as a renderer override (previously 404).
+- Absence serializer test confirms the additive `record_kind=system_absence` while legacy `session_type=evening` and `attendance_action=check_in` remain intact.
+- Existing migration tests run against the temporary test database and verify the 0004 historical-status conversion, retained rows, and duplicate-date abort behavior. No populated external database was used.
 
-## Manual QA and deployment evidence
+## Deployment and staging evidence
 
-Not verified in a live deployment. No live HTTPS URL, production or staging credentials, approved pilot campus coordinates/radius, mentor account, or test-student account were supplied. No live portal/kiosk screenshots, PostgreSQL/Redis connection evidence, Celery worker/Beat startup logs, or remote static-asset responses are available. See `DEPLOYMENT_STATUS.md`; the release is not production-ready.
+Portable web/worker/Beat process definitions, required environment variables, PostgreSQL/Redis configuration, static collection, HTTPS proxy requirements, a database-aware health check, and synthetic-data staging instructions are documented in `Procfile`, `docs/DEPLOYMENT.md`, and `docs/STAGING_CHECKLIST.md`.
 
-## Kiosk reference audit
+No hosting provider has been selected, no paid infrastructure was provisioned, and no live staging URL, PostgreSQL/Redis connection, Celery process, HTTPS response, or deployment log was available for verification.
 
-The Django backend routes the mentor kiosk through `/api/v1/mentor/qr/*`. The obsolete `dev/kiosk.html` file and its `server.py` startup-banner reference have been removed; the Django portal at `/` is the mentor entry point. This source audit is not evidence of live kiosk behavior.
+## Remaining release blockers
+
+- Run migration 0004 only after the owner approves its documented preflight, backup/restore rehearsal, staging result, and rollout plan. Do not apply it to a populated database before that gate.
+- Select a hosting provider, then create an isolated staging environment with synthetic accounts and capture live evidence.
+- Supply approved campus coordinates/radius, timezone, mentor access, and synthetic student account before testing QR geofencing.
+- Run the PostgreSQL concurrency test in staging; it was skipped on local SQLite.
+- Confirm Partner A accepts the additive `record_kind` values. System absence records retain the legacy evening/check-in enum values for compatibility until a later API version can replace them.
+- No production deployment, production data changes, merge, or live student test was performed.

@@ -5,12 +5,24 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from django.contrib.auth import authenticate
 from django.core.management import call_command
+from django.db import OperationalError
 from django.contrib.staticfiles import finders
 from django.test import TestCase, override_settings
 from apps.core.models import Campus, User
 
 
 class SecurityTests(TestCase):
+    def test_health_reports_database_readiness(self):
+        response = self.client.get("/health/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "service": "learn2earn-attendance", "database": "ok"})
+
+    def test_health_returns_503_when_database_is_unavailable(self):
+        with patch("config.urls.connection.cursor", side_effect=OperationalError("unavailable")):
+            response = self.client.get("/health/")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["database"], "unavailable")
+
     def test_student_portal_has_a_separate_django_route_and_vendored_assets(self):
         response=self.client.get("/student/")
         self.assertEqual(response.status_code,200)

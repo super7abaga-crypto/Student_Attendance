@@ -1,13 +1,16 @@
 from datetime import datetime, time, timedelta
+import csv
 import json
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
+from django.conf import settings
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework.authtoken.models import Token
-from apps.core.models import AuditLog, Campus, MentorCampusAccess, MonthlyReport, SessionRun, SessionSchedule, Student, User
-from apps.core.serializers import CampusSerializer, ScheduleSerializer
+from apps.core.models import AttendanceLog, AuditLog, Campus, MentorCampusAccess, MonthlyReport, SessionRun, SessionSchedule, Student, User
+from apps.core.serializers import AttendanceSerializer, CampusSerializer, ScheduleSerializer
 from apps.core.services import mint_qr
 
 
@@ -205,3 +208,57 @@ class AttendanceAPITests(TestCase):
         changed=client.patch("/api/v1/auth/mentor/profile/",{"display_name":"Updated Mentor"},format="json",HTTP_X_CSRFTOKEN=csrf)
         self.assertEqual(changed.status_code,200)
         self.assertEqual(mentor.pk,User.objects.get(username="mentor1").pk)
+
+    def test_login_endpoint_enforces_its_rate_limit(self):
+        from unittest.mock import patch
+        rates = {**settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"], "login": "2/min"}
+        with patch("apps.core.views.LoginThrottle.THROTTLE_RATES", rates):
+            cache.clear()
+            first = self.client.post("/api/v1/auth/student/login/", {"username": "missing", "password": "wrong"}, format="json")
+            second = self.client.post("/api/v1/auth/student/login/", {"username": "missing", "password": "wrong"}, format="json")
+            limited = self.client.post("/api/v1/auth/student/login/", {"username": "missing", "password": "wrong"}, format="json")
+        self.assertEqual(first.status_code, 401)
+        self.assertEqual(second.status_code, 401)
+        self.assertEqual(limited.status_code, 429)
+
+    def test_scan_endpoint_enforces_authenticated_scan_rate_limit(self):
+        from unittest.mock import patch
+        rates = {**settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"], "scan": "2/min"}
+        with patch("apps.core.views.ScanThrottle.THROTTLE_RATES", rates):
+            cache.clear()
+            self.client.force_authenticate(user=self.user)
+            first = self.client.post("/api/v1/attendance/scan/", {}, format="json")
+            second = self.client.post("/api/v1/attendance/scan/", {}, format="json")
+            limited = self.client.post("/api/v1/attendance/scan/", {}, format="json")
+        self.assertEqual(first.status_code, 400)
+        self.assertEqual(second.status_code, 400)
+        self.assertEqual(limited.status_code, 429)
+
+    def test_mentor_csv_export_contains_headers_and_escapes_formulas(self):
+        mentor = User.objects.create_user(username="csv-mentor", password="a-very-long-mentor-password", role=User.Role.MENTOR)
+        MentorCampusAccess.objects.create(user=mentor, campus=self.campus, can_export=True)
+        formula_user = User.objects.create_user(username="=HYPERLINK(1)", password="a-very-long-student-password",
+            first_name="=1+1", last_name="Student", role=User.Role.STUDENT, assigned_campus=self.campus)
+        formula_student = Student.objects.create(user=formula_user, campus=self.campus)
+        AttendanceLog.objects.create(student=formula_student, campus=self.campus, session_type="morning",
+            attendance_action="check_in", attendance_date=timezone.localdate(), status=AttendanceLog.Status.PRESENT)
+        self.client.force_authenticate(user=mentor)
+
+        response = self.client.get(f"/api/v1/mentor/attendance/?campus_id={self.campus.pk}&format=csv")
+
+        self.assertEqual(response.status_code, 200, response.content.decode("utf-8", errors="replace"))
+        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+        rows = list(csv.reader(response.content.decode("utf-8").splitlines()))
+        self.assertEqual(rows[0][:4], ["full_name", "username", "student_id", "campus"])
+        self.assertEqual(rows[1][0], "'=1+1 Student")
+        self.assertEqual(rows[1][1], "'=hyperlink(1)")
+
+    def test_absence_serializer_adds_kind_without_removing_legacy_fields(self):
+        absent = AttendanceLog.objects.create(student=self.student, campus=self.campus,
+            session_type="evening", attendance_action="check_in", attendance_date=timezone.localdate(),
+            status=AttendanceLog.Status.ABSENT, source=AttendanceLog.Source.MANUAL,
+            location_result="system_daily_absence")
+        payload = AttendanceSerializer(absent).data
+        self.assertEqual(payload["record_kind"], "system_absence")
+        self.assertEqual(payload["session_type"], "evening")
+        self.assertEqual(payload["attendance_action"], "check_in")
