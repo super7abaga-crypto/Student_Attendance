@@ -56,11 +56,17 @@ only suite that proves the integration; the two suites above run against the loc
 Prerequisites:
 
 1. Partner B's backend checked out locally (branch `feat/engineer-b-attendance`) with a
-   migrated database, a seeded campus with real `latitude`/`longitude`, one student
-   (`ada.okafor` / `student-pass-123`) and one campus admin (`campus_admin`).
+   **disposable** database whose name contains `e2e`, `test` or `sandbox`. The script seeds
+   its own fixtures (`E2E Campus`, `e2e.mentor`, `e2e.student`) and deletes only that
+   student's rows. It refuses to run against any other database unless
+   `E2E_ALLOW_NON_ISOLATED_DB=1` is set, because deleting real attendance would be
+   irreversible (issue #5).
+2. A campus timezone whose local time sits inside the morning window is picked
+   automatically from a small candidate list, so the run does not depend on the clock.
 2. Django running with a fixed signing secret and CORS for the portal origin:
 
    ```bash
+   DATABASE_URL=postgresql://postgres@127.0.0.1:55433/e2e_audit \
    DJANGO_SETTINGS_MODULE=config.settings.dev \
    ATTENDANCE_SECRET=local-audit-qr-secret-0123456789abcdef \
    CORS_ALLOWED_ORIGINS=http://127.0.0.1:8020 \
@@ -77,7 +83,7 @@ Prerequisites:
 
    ```bash
    cd tests
-   DJANGO_DIR=/path/to/backend SHOTS=./screenshots node e2e-django.js
+   DJANGO_DIR=/path/to/backend DATABASE_URL=postgresql://…/e2e_audit SHOTS=./screenshots node e2e-django.js
    ```
 
 `DJANGO_DIR` is used only to mint a QR envelope with `manage.py shell`, because the mentor

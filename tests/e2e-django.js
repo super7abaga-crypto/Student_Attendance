@@ -23,8 +23,18 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
 
 (async () => {
   fs.mkdirSync(SHOTS, { recursive: true });
-  // clean slate: remove today's attendance for the test student
-  sh("from apps.core.models import AttendanceLog; print('deleted', AttendanceLog.objects.all().delete())");
+
+  // Issue #5: never touch rows this run did not create. Refuse a database whose
+  // name does not look disposable, then seed and clean only E2E fixtures.
+  const dbName = sh("from django.conf import settings; print('DBNAME:' + str(settings.DATABASES['default'].get('NAME','')))").trim().split('\n').pop().replace('DBNAME:', '').trim();
+  if (!/(^|[\/_-])(e2e|test|sandbox)/i.test(dbName) && process.env.E2E_ALLOW_NON_ISOLATED_DB !== '1') {
+    console.error('Refusing to run: database "' + dbName + '" does not look disposable.\n'
+      + 'Point DATABASE_URL (or the sqlite NAME) at a database whose name contains e2e, test or sandbox,\n'
+      + 'or set E2E_ALLOW_NON_ISOLATED_DB=1 after confirming no real attendance lives there.');
+    process.exit(2);
+  }
+  const seed = JSON.parse(sh("from apps.core.models import Campus, Student, MentorCampusAccess, AttendanceLog; from django.contrib.auth import get_user_model; from django.utils import timezone; from zoneinfo import ZoneInfo; import json; U=get_user_model(); tzs=['America/Sao_Paulo','America/New_York','Africa/Lagos','Asia/Kolkata','Asia/Tokyo']; now=timezone.now(); tz=next((z for z in tzs if 9 <= timezone.localtime(now, ZoneInfo(z)).hour < 11), 'Africa/Lagos'); c,_=Campus.objects.get_or_create(name='E2E Campus', defaults={'latitude':4.8156,'longitude':7.0498,'geofence_radius_m':300,'timezone':tz,'active':True}); c.timezone=tz; c.latitude=4.8156; c.longitude=7.0498; c.geofence_radius_m=300; c.active=True; c.save(); m,_=U.objects.get_or_create(username='e2e.mentor', defaults={'role':U.Role.CAMPUS_ADMIN,'is_staff':True}); m.set_password('e2e-mentor-password-123'); m.save(); MentorCampusAccess.objects.get_or_create(user=m, campus=c); u,_=U.objects.get_or_create(username='e2e.student', defaults={'role':U.Role.STUDENT,'first_name':'E2E','last_name':'Student','assigned_campus':c}); u.set_password('e2e-student-password-123'); u.assigned_campus=c; u.save(); st,_=Student.objects.get_or_create(user=u, defaults={'campus':c}); print(json.dumps({'campus':c.name,'username':'e2e.student','password':'e2e-student-password-123','timezone':tz,'deleted':AttendanceLog.objects.filter(student=st).delete()[0]}))").trim().split('\n').pop());
+  console.log('   fixtures: ' + seed.campus + ' (' + seed.timezone + '), student ' + seed.username + ', removed ' + seed.deleted + ' prior E2E rows');
 
   const browser = await chromium.launch({ executablePath: CHROME,
     args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
@@ -38,16 +48,16 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
 
   console.log('\n1. Login against real Django');
   await page.goto(PORTAL, { waitUntil: 'networkidle' });
-  await page.fill('#loginUsername', 'ada.okafor');
-  await page.fill('#loginPassword', 'student-pass-123');
+  await page.fill('#loginUsername', seed.username);
+  await page.fill('#loginPassword', seed.password);
   await page.click('#loginFormEl button[type=submit]');
   await page.waitForSelector('#authScreen.hidden', { timeout: 8000 }).catch(() => {});
   check('portal opened after real login', await page.isVisible('#dashboardView'));
-  check('full name from Django', (await page.textContent('#topName')).trim() === 'Ada Okafor', await page.textContent('#topName'));
-  check('username from Django', (await page.textContent('#topUsername')).trim() === '@ada.okafor', await page.textContent('#topUsername'));
+  check('full name from Django', (await page.textContent('#topName')).trim() === 'E2E Student', await page.textContent('#topName'));
+  check('username from Django', (await page.textContent('#topUsername')).trim() === '@' + seed.username, await page.textContent('#topUsername'));
   const campusTop = (await page.textContent('#topCampus')).trim();
   const campusProfile = (await page.textContent('#profileCampus')).trim();
-  check('campus shows campus_name, not the UUID', campusTop === 'CTEC' && campusProfile === 'CTEC', 'topCampus=' + campusTop + ' profileCampus=' + campusProfile);
+  check('campus shows campus_name, not the UUID', campusTop === seed.campus && campusProfile === seed.campus, 'topCampus=' + campusTop + ' profileCampus=' + campusProfile);
   await page.screenshot({ path: path.join(SHOTS, 'e2e-dashboard.png') });
 
   console.log('\n2. Session persistence (same tab reload)');
@@ -56,7 +66,7 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
   check('session restored after reload', await page.isVisible('#dashboardView'));
 
   console.log('\n3. Live QR scan (backend-minted, 30s TTL)');
-  sh("from apps.core.models import Campus, SessionRun; from apps.core import services; from django.utils import timezone; from django.contrib.auth import get_user_model; import json; U=get_user_model(); m=U.objects.get(username='campus_admin'); c=Campus.objects.get(name='CTEC'); r,_=SessionRun.objects.get_or_create(campus=c, attendance_date=timezone.localdate(), session_type='morning', defaults={'attendance_action':'check_in','started_by':m}); json.dump(services.mint_qr(r), open('/tmp/env2.json','w'))");
+  sh("from apps.core.models import Campus, SessionRun; from apps.core import services; from django.utils import timezone; from django.contrib.auth import get_user_model; import json; U=get_user_model(); m=U.objects.get(username='e2e.mentor'); c=Campus.objects.get(name='E2E Campus'); r,_=SessionRun.objects.get_or_create(campus=c, attendance_date=timezone.localdate(), session_type='morning', defaults={'attendance_action':'check_in','started_by':m}); json.dump(services.mint_qr(r), open('/tmp/env2.json','w'))");
   const envelope = JSON.parse(fs.readFileSync('/tmp/env2.json', 'utf8'));
   await page.evaluate((p) => window.onQrDecoded(p), JSON.stringify(envelope));
   await page.waitForSelector('#confirmationModal:not(.hidden)', { timeout: 15000 }).catch(() => {});
@@ -71,7 +81,7 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
     const cardDate = (await page.textContent('#confirmDate')).trim();
     check('date from backend', /^\d{1,2} [A-Z][a-z]{2} \d{4}$/.test(cardDate), cardDate);
     check('time from backend', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')), await page.textContent('#confirmTime'));
-    check('student name on card', (await page.textContent('#confirmName')).trim() === 'Ada Okafor', await page.textContent('#confirmName'));
+    check('student name on card', (await page.textContent('#confirmName')).trim() === 'E2E Student', await page.textContent('#confirmName'));
     await page.screenshot({ path: path.join(SHOTS, 'e2e-scan-success.png') });
     await page.click('#closeConfirmation');
     await page.waitForTimeout(400);
@@ -85,7 +95,7 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
   const dupCard = await page.isVisible('#confirmationModal');
   check('duplicate shows the original record from history', dupCard);
   if (dupCard) {
-    check('duplicate card keeps the backend name', (await page.textContent('#confirmName')).trim() === 'Ada Okafor', await page.textContent('#confirmName'));
+    check('duplicate card keeps the backend name', (await page.textContent('#confirmName')).trim() === 'E2E Student', await page.textContent('#confirmName'));
     check('duplicate card keeps the backend time', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')), await page.textContent('#confirmTime'));
   }
   await page.screenshot({ path: path.join(SHOTS, 'e2e-duplicate.png') });
