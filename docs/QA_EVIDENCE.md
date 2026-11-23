@@ -43,6 +43,8 @@ Portable web/worker/Beat process definitions, required environment variables, Po
 
 No hosting provider has been selected, no paid infrastructure was provisioned, and no live staging URL, PostgreSQL/Redis connection, Celery process, HTTPS response, or deployment log was available for verification.
 
+An additional `manage.py check --deploy` attempt using placeholder-only PostgreSQL/Redis URLs did not complete and was stopped. It is not counted as a passing check; repeat it with the selected staging provider's configuration.
+
 ## Remaining release blockers
 
 - Run migration 0004 only after the owner approves its documented preflight, backup/restore rehearsal, staging result, and rollout plan. Do not apply it to a populated database before that gate.
