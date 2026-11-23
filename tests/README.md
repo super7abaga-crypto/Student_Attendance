@@ -12,7 +12,8 @@ python3 tests/api-test.py
 
 Requires Python 3.9+ and nothing else. 48 checks covering authentication, the Token scheme,
 history, every documented scan outcome, static assets under `/student/`, and three pinned-clock
-scenarios (09:05 on_time, 09:10 exactly at cutoff late, 09:11 late).
+scenarios (09:05 present, 09:10 exactly at cutoff late, 09:11 late) and a three-checkpoint
+day (morning, afternoon and evening on one campus-local date, each with its own duplicate).
 
 ## Browser suite
 

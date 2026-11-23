@@ -173,8 +173,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.evaluate((payload) => window.onQrDecoded(payload), qr);
   await page.waitForSelector('#confirmationModal:not(.hidden)', { timeout: 8000 }).catch(() => {});
   await sleep(300);
-  check('duplicate message shown', /already been recorded for today/i.test(await page.textContent('#scanNotice')), await page.textContent('#scanNotice'));
-  check('duplicate card opens with original record', /Already checked in/.test(await page.textContent('#confirmationTitle')), await page.textContent('#confirmationTitle'));
+  check('duplicate message shown', /already completed this checkpoint/i.test(await page.textContent('#scanNotice')), await page.textContent('#scanNotice'));
+  check('duplicate card opens with original record', /already recorded/i.test(await page.textContent('#confirmationTitle')), await page.textContent('#confirmationTitle'));
   check('original name preserved', (await page.textContent('#confirmName')).trim() === 'Demo Student');
   check('original time preserved', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')));
   await page.screenshot({ path: path.join(SHOTS, '06-duplicate.png') });
@@ -194,12 +194,30 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.waitForSelector('#confirmationModal:not(.hidden)', { timeout: 8000 }).catch(() => {});
   await sleep(400);
   check('409 without a body record still shows the history record',
-    /Already checked in/.test(await page.textContent('#confirmationTitle')), await page.textContent('#confirmationTitle'));
+    /already recorded/i.test(await page.textContent('#confirmationTitle')), await page.textContent('#confirmationTitle'));
   check('fallback record keeps the backend name', (await page.textContent('#confirmName')).trim() === 'Demo Student', await page.textContent('#confirmName'));
   check('fallback record keeps the backend time', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')), await page.textContent('#confirmTime'));
   await page.screenshot({ path: path.join(SHOTS, '06b-duplicate-from-history.png') });
   await page.click('#closeConfirmation');
   await page.unroute('**/attendance/scan/');
+
+  console.log('\n7b. Checkpoint panel and per-checkpoint history');
+  const checkpointRows = await page.$$eval('#checkpointRows tr', (rows) =>
+    rows.map((row) => row.textContent.replace(/\s+/g, ' ').trim()));
+  check('three checkpoints are listed for today', checkpointRows.length === 3, JSON.stringify(checkpointRows));
+  const morningRow = checkpointRows.find((row) => /Morning/i.test(row)) || '';
+  check('morning checkpoint shows a recorded state', /PRESENT|LATE/i.test(morningRow), morningRow);
+  check('morning checkpoint shows the check-in action', /Check-in/i.test(morningRow), morningRow);
+  check('later checkpoints are still open, not duplicates',
+    checkpointRows.filter((row) => /NOT RECORDED YET/i.test(row)).length >= 1, JSON.stringify(checkpointRows));
+
+  const historyHead = await page.$$eval('#historyView thead th', (cells) => cells.map((c) => c.textContent.trim()));
+  check('history exposes an ACTION column', historyHead.includes('ACTION'), JSON.stringify(historyHead));
+  const historyActions = await page.$$eval('#historyRows tr td[data-label="Action"]', (cells) => cells.map((c) => c.textContent.trim()));
+  check('history rows show a humanised action', historyActions.every((value) => /Check-(in|out)/i.test(value)), JSON.stringify(historyActions.slice(0, 4)));
+  const historySessions = await page.$$eval('#historyRows tr td[data-label="Session"]', (cells) => cells.map((c) => c.textContent.trim()));
+  check('history names the checkpoint, not a generic day', historySessions.every((value) => /Morning|Afternoon|Evening/i.test(value)), JSON.stringify(historySessions.slice(0, 4)));
+  await page.screenshot({ path: path.join(SHOTS, '10-checkpoints.png') });
 
   console.log('\n8. Expired QR');
   const expired = await page.evaluate(async () => {

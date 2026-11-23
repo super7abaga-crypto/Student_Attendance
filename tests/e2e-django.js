@@ -91,7 +91,7 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
   await page.evaluate((p) => window.onQrDecoded(p), JSON.stringify(envelope));
   await page.waitForTimeout(2500);
   const notice = (await page.textContent('#scanNotice')).trim();
-  check('duplicate message shown', /already been recorded for today/i.test(notice), notice);
+  check('duplicate message shown', /already completed this checkpoint/i.test(notice), notice);
   const dupCard = await page.isVisible('#confirmationModal');
   check('duplicate shows the original record from history', dupCard);
   if (dupCard) {
@@ -110,6 +110,23 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
   check('history shows morning session', /Morning Session/.test(rowText), rowText.slice(0, 120));
   check('history shows late badge', /LATE|Late/.test(rowText), rowText.slice(0, 120));
   await page.screenshot({ path: path.join(SHOTS, 'e2e-history.png') });
+
+  console.log('\n5b. Three checkpoints on one campus-local day (real backend data)');
+  sh("from apps.core.models import AttendanceLog, Student; from django.utils import timezone; import json; s=Student.objects.get(user__username='e2e.student'); day=timezone.localdate(); made=[]; "
+     + "\nfor sess, act, tm in [('afternoon','check_in','13:05:00'), ('evening','check_out','17:05:00')]:\n"
+     + "    AttendanceLog.objects.get_or_create(student=s, attendance_date=day, session_type=sess, defaults={'campus': s.campus, 'attendance_action': act, 'status': 'present', 'source': 'qr', 'location_verified': True, 'location_accuracy_m': 12, 'location_distance_m': 40})\n"
+     + "print('ROWS:' + str(AttendanceLog.objects.filter(student=s, attendance_date=day).count()))");
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(1500);
+  const checkpointRows = await page.$$eval('#checkpointRows tr', (trs) => trs.map((tr) => tr.textContent.replace(/\s+/g, ' ').trim()));
+  check('all three checkpoints are listed', checkpointRows.length === 3, JSON.stringify(checkpointRows));
+  check('every checkpoint shows a recorded state', checkpointRows.every((r) => /PRESENT|LATE|ABSENT/i.test(r)), JSON.stringify(checkpointRows));
+  check('evening shows the check-out action', /Evening.*Check-out/i.test(checkpointRows.join(' | ')), JSON.stringify(checkpointRows));
+  const dayRows = await page.$$eval('#historyRows tr', (trs) => trs.map((tr) => tr.textContent.replace(/\s+/g, ' ').trim()));
+  check('history shows three records for the day', dayRows.length >= 3, JSON.stringify(dayRows.slice(0, 4)));
+  check('history distinguishes check-in from check-out',
+    dayRows.some((r) => /Check-in/i.test(r)) && dayRows.some((r) => /Check-out/i.test(r)), JSON.stringify(dayRows.slice(0, 4)));
+  await page.screenshot({ path: path.join(SHOTS, 'e2e-three-checkpoints.png') });
 
   console.log('\n6. Logout');
   await page.click('#logoutBtn');

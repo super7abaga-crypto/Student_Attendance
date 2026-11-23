@@ -391,12 +391,13 @@ function showView(name) {
 
 /* -------------------------------------------------------------- attendance -- */
 function setTableState(tbody, message, kind = "empty") {
-  tbody.innerHTML = `<tr><td colspan="4" class="empty-cell ${kind}">${escapeHtml(message)}</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="5" class="empty-cell ${kind}">${escapeHtml(message)}</td></tr>`;
 }
 
 function recordRow(record) {
   return `<tr>
     <td data-label="Session"><strong>${escapeHtml(sessionLabel(record.session_type || record.session_name))}</strong></td>
+    <td data-label="Action">${escapeHtml(actionLabel(record.attendance_action))}</td>
     <td data-label="Date">${escapeHtml(dateLabel(record))}</td>
     <td data-label="Time">${escapeHtml(timeLabel(record))}</td>
     <td data-label="Status">${statusBadge(record)}</td>
@@ -413,7 +414,7 @@ function todayWatKey() {
 // nothing for today (or cannot be loaded) so the caller can degrade gracefully.
 // Always read today's record from the server. A cached list can predate the scan that
 // just succeeded, and a duplicate must never be shown from stale data.
-async function fetchTodaysRecord() {
+async function fetchTodaysRecord(sessionType) {
   const payload = await apiRequest("/student/attendance-history/");
   const list = Array.isArray(payload)
     ? payload
@@ -425,9 +426,16 @@ async function fetchTodaysRecord() {
   renderDashboard();
   renderHistory();
   const today = todayWatKey();
-  return sortRecords(list).filter(
+  const todays = sortRecords(list).filter(
     (record) => String(record.attendance_date || "").slice(0, 10) === today
-  )[0] || null;
+  );
+  if (!todays.length) return null;
+  const wanted = String(sessionType || "").trim().toLowerCase();
+  if (wanted) {
+    const match = todays.find((record) => String(record.session_type || "").trim().toLowerCase() === wanted);
+    if (match) return match;
+  }
+  return todays[0];
 }
 
 function sortRecords(records) {
@@ -456,6 +464,8 @@ function renderDashboard() {
     $("statLast").textContent = "—";
     $("statLastMeta").textContent = "No scan recorded yet";
   }
+
+  renderCheckpoints();
 
   const tbody = $("recentRows");
   if (!records.length) {
@@ -625,8 +635,9 @@ function getFreshPosition() {
   });
 }
 
-// Attendance is daily: a second scan on the same campus-local day is a duplicate.
-const DUPLICATE_TODAY_TEXT = "Your attendance has already been recorded for today.";
+// Attendance is per checkpoint: a repeat scan in the same checkpoint is a duplicate,
+// while a later checkpoint on the same campus-local day is a legitimate new record.
+const DUPLICATE_CHECKPOINT_TEXT = "You have already completed this checkpoint today.";
 
 function describeScanError(error) {
   const code = String(error.code || "").toLowerCase();
@@ -643,7 +654,7 @@ function describeScanError(error) {
     return { text: "Your student account is inactive. Please contact your mentor or campus administrator." };
   }
   if (error.status === 409 || code.includes("duplicate")) {
-    return { text: DUPLICATE_TODAY_TEXT, duplicate: true };
+    return { text: DUPLICATE_CHECKPOINT_TEXT, duplicate: true };
   }
   if (code.includes("expired") || /expired/i.test(message)) {
     return { text: "This QR code has expired. Ask your mentor to show the current code and scan again.", retry: true };
@@ -720,7 +731,9 @@ async function onQrDecoded(decodedText) {
       let refreshFailed = false;
       if (!existing) {
         try {
-          existing = await fetchTodaysRecord();
+          existing = await fetchTodaysRecord(
+            (error.body && error.body.attendance && error.body.attendance.session_type) || ""
+          );
         } catch (lookupError) {
           if (lookupError.sessionExpired) return handleSessionExpired();
           refreshFailed = true;
@@ -728,7 +741,7 @@ async function onQrDecoded(decodedText) {
       }
       if (existing) {
         showConfirmation(existing, { duplicate: true });
-        showScanNotice(DUPLICATE_TODAY_TEXT);
+        showScanNotice(DUPLICATE_CHECKPOINT_TEXT);
       } else if (refreshFailed) {
         showScanNotice(
           "Your attendance for today was already recorded, but we could not refresh the record just now. Reopen the History tab to load it.",
@@ -752,6 +765,51 @@ async function onQrDecoded(decodedText) {
 }
 
 /* ------------------------------------------------------------ confirmation -- */
+const CHECKPOINTS = ["morning", "afternoon", "evening"];
+const ACTION_LABELS = { check_in: "Check-in", check_out: "Check-out" };
+
+function actionLabel(action) {
+  const key = String(action || "").trim().toLowerCase();
+  if (!key) return "—";
+  return ACTION_LABELS[key] || key.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function todaysRecords() {
+  const today = todayWatKey();
+  return sortRecords(state.records.filter(
+    (record) => String(record.attendance_date || "").slice(0, 10) === today
+  ));
+}
+
+// One row per checkpoint, built only from records the backend returned.
+function renderCheckpoints() {
+  const body = $("checkpointRows");
+  if (!body) return;
+  const today = todaysRecords();
+  const bySession = {};
+  today.forEach((record) => {
+    const key = String(record.session_type || "").trim().toLowerCase();
+    if (key && !bySession[key]) bySession[key] = record;
+  });
+  const known = CHECKPOINTS.concat(
+    Object.keys(bySession).filter((key) => !CHECKPOINTS.includes(key))
+  );
+  body.innerHTML = known.map((key) => {
+    const record = bySession[key];
+    const state = record
+      ? `<span class="status-pill ${statusClass(record.status)}" data-status="${escapeHtml(record.status)}">${escapeHtml(statusLabel(record.status).toUpperCase())}</span>`
+      : '<span class="status-pill neutral">NOT RECORDED YET</span>';
+    const meta = record
+      ? `${escapeHtml(actionLabel(record.attendance_action))} · ${escapeHtml(timeLabel(record))}`
+      : "Scan this checkpoint's QR when your mentor opens it";
+    return `<tr>
+      <td data-label="Checkpoint"><strong>${escapeHtml(sessionLabel(key))}</strong></td>
+      <td data-label="State">${state}</td>
+      <td data-label="Detail">${meta}</td>
+    </tr>`;
+  }).join("");
+}
+
 function showConfirmation(attendance, { duplicate = false } = {}) {
   const rawStatus = String(attendance.status || "").trim();
   $("confirmName").textContent = attendance.full_name || state.student?.full_name || "—";
@@ -776,10 +834,14 @@ function showConfirmation(attendance, { duplicate = false } = {}) {
   card.classList.toggle("duplicate", duplicate);
   $("confirmationMark").textContent = duplicate ? "!" : "✓";
   $("confirmationEyebrow").textContent = duplicate ? "ALREADY RECORDED" : "ATTENDANCE VERIFIED";
-  $("confirmationTitle").textContent = duplicate ? "Already checked in" : "You're checked in!";
+  const checkpoint = sessionLabel(attendance.session_type || attendance.session_name);
+  const verb = String(attendance.attendance_action || "").toLowerCase() === "check_out" ? "check-out" : "check-in";
+  $("confirmationTitle").textContent = duplicate
+    ? `${checkpoint} already recorded`
+    : `${checkpoint} ${verb} confirmed`;
   $("confirmationSubtitle").textContent = duplicate
-    ? "Already checked in for this session. This is the record we already have for you."
-    : "Your attendance has been recorded successfully.";
+    ? `You already completed the ${checkpoint.toLowerCase()} checkpoint today. This is the record on file.`
+    : `Your ${checkpoint.toLowerCase()} attendance was recorded by the server.`;
 
   $("confirmationModal").classList.remove("hidden");
   $("confirmationModal").querySelector(".confirmation-card").focus();

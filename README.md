@@ -165,7 +165,7 @@ change.
 
 **Duplicates.** Engineer B's 409 carries no `attendance` object, so on a duplicate the portal
 re-reads the student's own history and shows today's existing record, clearly marked as
-already checked in. If history has nothing for today it says so and shows no card; it never
+already completed that checkpoint. If history has nothing for that checkpoint it says so and shows no card; it never
 fabricates a record.
 
 `attendance_action` is rendered verbatim in the confirmation card's BACKEND ACTION row and

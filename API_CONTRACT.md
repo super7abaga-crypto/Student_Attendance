@@ -124,7 +124,7 @@ by HTTP 409 and `code: duplicate_attendance`, not by this field.
 **Duplicate responses may omit the record.** Engineer B's 409 returns only
 `{success, code: "duplicate_attendance", message}`. The portal therefore re-reads
 `/student/attendance-history/` and displays today's existing record, marked as already checked
-in. When history has no record for today the notice is shown without a card: the portal never
+in. When history has no record for that checkpoint the notice is shown without a card: the portal never
 invents attendance data. If Partner B later includes the record in the 409 body, the portal
 uses it directly and skips the lookup.
 
@@ -132,7 +132,7 @@ Error codes the portal maps to student-readable messages:
 
 | HTTP | `code` | Meaning |
 |---|---|---|
-| 409 | `duplicate_attendance` | Attendance already recorded for today (one record per campus-local day) |
+| 409 | `duplicate_attendance` | Attendance already recorded for this checkpoint (one record per student, campus-local day and checkpoint). The same student may scan at later checkpoints that day. |
 | 403 | `qr_expired` | QR past its 30-second life |
 | 400 | `invalid_qr` | Malformed or not an attendance code |
 | 403 | `wrong_campus` | Outside the campus geofence |

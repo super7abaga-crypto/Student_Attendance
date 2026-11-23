@@ -58,9 +58,9 @@ MOCK_ATTENDANCE_ACTION = os.environ.get("MOCK_ATTENDANCE_ACTION", "check_in")  #
 
 WAT_OFFSET_MIN = 60                          # Africa/Lagos is UTC+1 all year
 SESSIONS = {
-    "morning":   {"label": "Morning Session",   "start": 9 * 60,  "cutoff": 9 * 60 + 10},
-    "afternoon": {"label": "Afternoon Session", "start": 13 * 60, "cutoff": 13 * 60 + 10},
-    "evening":   {"label": "Evening Session",   "start": 17 * 60, "cutoff": 17 * 60 + 10},
+    "morning":   {"label": "Morning Session",   "start": 9 * 60,  "cutoff": 9 * 60 + 10,  "close": 12 * 60, "action": "check_in"},
+    "afternoon": {"label": "Afternoon Session", "start": 13 * 60, "cutoff": 13 * 60 + 10, "close": 16 * 60, "action": "check_in"},
+    "evening":   {"label": "Evening Session",   "start": 17 * 60, "cutoff": 17 * 60 + 10, "close": 20 * 60, "action": "check_out"},
 }
 # A session accepts scans from its start until SESSION_OPEN_MINUTES after the start.
 # Outside that window the session is inactive and the server refuses the scan.
@@ -488,19 +488,24 @@ class Handler(BaseHTTPRequestHandler):
             })
         session_id = f"{parts['date']}-{session_type}"
         with LOCK:
-            # Daily policy: one record per student per campus-local date, whatever the session.
+            # Checkpoint policy: one record per student per checkpoint per campus-local date.
             existing = next((r for r in DB["attendance"]
                              if r["student_id"] == student["id"]
-                             and r["attendance_date"] == parts["date"]), None)
+                             and r["attendance_date"] == parts["date"]
+                             and r["session_type"] == session_type), None)
             if existing:
                 return self.send_json(409, {
-                    "detail": "Attendance has already been recorded for today.",
+                    "detail": "Attendance has already been recorded for this checkpoint.",
                     "code": "duplicate_attendance",
                     "attendance": record_view(existing),
                 })
 
-            # Exactly at the cutoff counts as late, per the current contract.
-            status = "late" if parts["minutes"] >= SESSIONS[session_type]["cutoff"] else "present"
+            # Exactly at the cutoff counts as late for check-ins; the evening
+            # checkout is never late (Partner B forces present for check_out).
+            action = SESSIONS[session_type]["action"]
+            status = ("present" if action == "check_out"
+                      else "late" if parts["minutes"] >= SESSIONS[session_type]["cutoff"]
+                      else "present")
             row = {
                 "id": str(uuid.uuid4()),
                 "student_id": student["id"],
@@ -513,7 +518,7 @@ class Handler(BaseHTTPRequestHandler):
                 "status": status,
                 # MOCK ONLY placeholder. Engineer B's contract owns this enum; the
                 # frontend renders whatever arrives and never branches on it.
-                "attendance_action": MOCK_ATTENDANCE_ACTION,
+                "attendance_action": action,
                 "campus": student.get("campus", CAMPUS["name"]),
                 "session_id": session_id,
                 "accuracy": accuracy,

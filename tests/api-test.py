@@ -100,11 +100,11 @@ class Client:
 class Mock:
     """Boot server.py on a free port with a throwaway data file."""
 
-    def __init__(self, now_wat: str | None = None):
+    def __init__(self, now_wat: str | None = None, data_file: Path | None = None):
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}/api/v1"
         self.root_url = f"http://127.0.0.1:{self.port}"
-        self.data_file = Path(tempfile.mkdtemp()) / "data.json"
+        self.data_file = data_file or Path(tempfile.mkdtemp()) / "data.json"
         env = {
             **os.environ,
             "PORT": str(self.port),
@@ -175,6 +175,54 @@ def scenario_cutoffs() -> None:
                   f"{status} {attendance.get('status')}")
         finally:
             mock.stop()
+
+
+def scenario_three_checkpoints() -> None:
+    """One student completes morning, afternoon and evening on the same local day."""
+    data_file = Path(tempfile.mkdtemp()) / "day.json"
+    results = {}
+    for checkpoint, clock in [("morning", "09:05"), ("afternoon", "13:05"), ("evening", "17:05")]:
+        mock = Mock(now_wat=clock, data_file=data_file)
+        try:
+            token = login(mock.client)
+            status, body = mock.client.call("POST", "/attendance/scan/",
+                                            scan_body(mock.client, checkpoint), token=token)
+            attendance = body.get("attendance", {})
+            results[checkpoint] = (status, attendance)
+
+            # a repeat scan inside the same checkpoint is a duplicate
+            again, duplicate = mock.client.call("POST", "/attendance/scan/",
+                                                scan_body(mock.client, checkpoint), token=token)
+            check(f"{checkpoint}: repeat scan in the same checkpoint is 409",
+                  again == 409 and duplicate.get("code") == "duplicate_attendance",
+                  f"{again} {duplicate.get('code')}")
+            check(f"{checkpoint}: duplicate returns the existing record",
+                  bool(duplicate.get("attendance")), str(duplicate)[:80])
+
+            status_list, history = mock.client.call("GET", "/student/attendance-history/", token=token)
+            today = (results[checkpoint][1] or {}).get("attendance_date")
+            todays = [row for row in (history if isinstance(history, list) else [])
+                      if row.get("attendance_date") == today]
+            check(f"{checkpoint}: history holds one row per completed checkpoint",
+                  status_list == 200 and len(todays) == len(results),
+                  f"{status_list} rows={len(todays)}")
+        finally:
+            mock.stop()
+
+    check("morning record is 201", results["morning"][0] == 201, results["morning"][0])
+    check("afternoon record is 201", results["afternoon"][0] == 201, results["afternoon"][0])
+    check("evening record is 201", results["evening"][0] == 201, results["evening"][0])
+    check("morning uses check_in", results["morning"][1].get("attendance_action") == "check_in",
+          results["morning"][1].get("attendance_action"))
+    check("afternoon uses check_in", results["afternoon"][1].get("attendance_action") == "check_in",
+          results["afternoon"][1].get("attendance_action"))
+    check("evening uses check_out", results["evening"][1].get("attendance_action") == "check_out",
+          results["evening"][1].get("attendance_action"))
+    check("evening checkout is never late", results["evening"][1].get("status") == "present",
+          results["evening"][1].get("status"))
+    check("three separate records exist for one day",
+          len({(r[1].get("attendance_date"), r[1].get("session_type")) for r in results.values()}) == 3,
+          str([(r[1].get("attendance_date"), r[1].get("session_type")) for r in results.values()]))
 
 
 def main() -> int:
@@ -285,6 +333,9 @@ def main() -> int:
 
     print("\n5. Cutoff status from a pinned clock (mock only)")
     scenario_cutoffs()
+
+    print("\n6. Three checkpoints in one campus-local day")
+    scenario_three_checkpoints()
 
     print(f"\nRESULT: {passed} passed, {failed} failed")
     if failures:
