@@ -7,7 +7,7 @@ from django.utils import timezone
 from unittest.mock import patch
 from apps.core.hashers import LegacyNodeScryptPasswordHasher
 from apps.core.models import AttendanceLog, Campus, SessionRun, SessionSchedule, Student, User
-from apps.core.services import attended_sessions, mint_qr, record_scan, summary_for
+from apps.core.services import attended_sessions, mint_qr, record_scan, report_for, summary_for
 
 
 @override_settings(QR_SIGNING_SECRET="test-secret-" + "x" * 48)
@@ -18,6 +18,18 @@ class AttendanceServiceTests(TestCase):
         self.student=Student.objects.create(user=self.student_user,campus=self.campus)
         for kind,start,late,close in [("morning",time(9),time(9,10),time(12)),("afternoon",time(13),time(13,10),time(16)),("evening",time(17),time(17,10),time(20))]:
             SessionSchedule.objects.create(campus=self.campus,session_type=kind,start_time=start,late_after=late,close_time=close)
+
+    def test_monthly_report_marks_generated_absence_and_system_source(self):
+        day = timezone.localdate()
+        AttendanceLog.objects.create(student=self.student, campus=self.campus, session_type="evening",
+            attendance_action="check_in", attendance_date=day, status=AttendanceLog.Status.ABSENT,
+            source=AttendanceLog.Source.SYSTEM, location_result="system_daily_absence")
+
+        report, _ = report_for(self.campus, day.year, day.month)
+
+        self.assertTrue(report.csv_content.startswith("full_name,username,student_id,campus,track,cohort,record_kind"))
+        report_rows = report.json_content["attendance"]
+        self.assertTrue(any(row["record_kind"] == "system_absence" and row["source"] == "Automated system" for row in report_rows))
 
     def token_at(self, session="morning", at=None):
         at=at or timezone.make_aware(datetime(2026,11,18,9,5),ZoneInfo("Africa/Lagos"))

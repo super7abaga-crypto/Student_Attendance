@@ -484,11 +484,11 @@ class MentorAttendanceView(APIView):
             items=list(qs)
         if request.query_params.get("format")=="csv":
             if not user_can_export(request.user,campus): raise PermissionDenied("CSV export is not permitted for this campus.")
-            out=io.StringIO(); writer=csv.writer(out); writer.writerow(["full_name","username","student_id","campus","track","cohort","session_type","attendance_action","attendance_date","scan_time_wat","status","source","location_verified"])
+            out=io.StringIO(); writer=csv.writer(out); writer.writerow(["full_name","username","student_id","campus","track","cohort","record_kind","session_type","attendance_action","attendance_date","scan_time_wat","status","source","location_verified"])
             for item in items:
                 if isinstance(item,dict): row=item
-                else: row={"full_name":item.student.user.full_name,"username":item.student.user.username,"student_id":item.student_id,"campus":item.campus.name,"track":item.track_name,"cohort":item.cohort_name,"session_type":item.session_type,"attendance_action":item.attendance_action,"attendance_date":item.attendance_date,"scan_time_wat":item.scan_time_wat,"status":item.get_status_display(),"source":item.get_source_display(),"location_verified":item.location_verified}
-                writer.writerow([csv_safe(row.get(k,"")) for k in ("full_name","username","student_id","campus","track","cohort","session_type","attendance_action","attendance_date","scan_time_wat","status","source","location_verified")])
+                else: row={"full_name":item.student.user.full_name,"username":item.student.user.username,"student_id":item.student_id,"campus":item.campus.name,"track":item.track_name,"cohort":item.cohort_name,"record_kind":"system_absence" if item.location_result == "system_daily_absence" else "manual_absence" if item.status == AttendanceLog.Status.ABSENT else "attendance","session_type":item.session_type,"attendance_action":item.attendance_action,"attendance_date":item.attendance_date,"scan_time_wat":item.scan_time_wat,"status":item.get_status_display(),"source":item.get_source_display(),"location_verified":item.location_verified}
+                writer.writerow([csv_safe(row.get(k,"")) for k in ("full_name","username","student_id","campus","track","cohort","record_kind","session_type","attendance_action","attendance_date","scan_time_wat","status","source","location_verified")])
             audit(request.user,"attendance.csv.export",campus=campus,details={"rows":len(items)},request=request)
             response=HttpResponse(out.getvalue(),content_type="text/csv; charset=utf-8"); response["Content-Disposition"]='attachment; filename="learn2earn-attendance.csv"'; response["X-Content-Type-Options"]="nosniff"; return response
         paginator=PageNumberPagination(); paginator.page_size=50

@@ -249,9 +249,25 @@ class AttendanceAPITests(TestCase):
         self.assertEqual(response.status_code, 200, response.content.decode("utf-8", errors="replace"))
         self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
         rows = list(csv.reader(response.content.decode("utf-8").splitlines()))
+        self.assertIn("record_kind", rows[0])
         self.assertEqual(rows[0][:4], ["full_name", "username", "student_id", "campus"])
         self.assertEqual(rows[1][0], "'=1+1 Student")
         self.assertEqual(rows[1][1], "'=hyperlink(1)")
+        self.assertEqual(rows[1][6], "attendance")
+
+    def test_system_absence_csv_is_identified_as_automated(self):
+        mentor = User.objects.create_user(username="absence-csv-mentor", password="a-very-long-mentor-password", role=User.Role.MENTOR)
+        MentorCampusAccess.objects.create(user=mentor, campus=self.campus, can_export=True)
+        AttendanceLog.objects.create(student=self.student, campus=self.campus, session_type="evening",
+            attendance_action="check_in", attendance_date=timezone.localdate(), status=AttendanceLog.Status.ABSENT,
+            source=AttendanceLog.Source.SYSTEM, location_result="system_daily_absence")
+        self.client.force_authenticate(user=mentor)
+
+        response = self.client.get(f"/api/v1/mentor/attendance/?campus_id={self.campus.pk}&format=csv")
+
+        rows = list(csv.reader(response.content.decode("utf-8").splitlines()))
+        self.assertEqual(rows[1][6], "system_absence")
+        self.assertEqual(rows[1][12], "Automated system")
 
     def test_absence_serializer_adds_kind_without_removing_legacy_fields(self):
         absent = AttendanceLog.objects.create(student=self.student, campus=self.campus,

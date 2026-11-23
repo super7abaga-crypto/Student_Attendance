@@ -1,5 +1,11 @@
 # Migration 0004 safety plan
 
+## Earlier primary-key migration (`0003`)
+
+Migration `0003_alter_mentorcampusaccess_id_alter_sessionschedule_id` now converts the two legacy auto-increment IDs to UUIDs without dropping their rows. On PostgreSQL it assigns each old ID a deterministic UUIDv5 derived from the table name and old integer ID, then replaces the primary-key column. The current schema has no foreign keys referencing either ID; the migration checks for inbound foreign keys and stops before changing a table if one is found. SQLite uses Django's table rebuild operation. Databases that already recorded `0003` are not replayed by Django; the repair applies to fresh/unmigrated databases. Do not fake or roll back this migration to force it to run on a populated database.
+
+Before applying `0003` to an existing PostgreSQL database, take and verify a backup, confirm both tables have the expected BIGINT or UUID `id` type, and inspect that no external application/database objects depend on those IDs. The migration preserves every row and emits stable UUIDs, but numeric IDs change and external integrations that store them must be updated. Validate row counts and references in an isolated restored copy first. This work has not been run against production data.
+
 ## Approval status
 
 **Do not run migration 0004 against production until the release owner has reviewed and approved the duplicate report, backup/restore rehearsal, staging result, and rollout plan.** Documentation and code review do not constitute production approval. The migration has not been run against production as part of this work.
@@ -63,6 +69,10 @@ Get-FileHash .\attendance-before-core-0004.dump -Algorithm SHA256
 Point an isolated staging copy at the restored database. Repeat the duplicate-count query; verify it returns zero; apply migrations there; verify the migration state; compare row counts and sample primary keys/metadata; and confirm `on_time` no longer appears in the three converted status columns. Rehearse restoration into a separate empty database and record the result. Do not use a production restore target for the rehearsal.
 
 If the production migration is ever approved and fails, stop deployment activity, preserve logs, and restore the verified pre-migration backup using the database provider's documented restore procedure before restarting writers. Do not try to repair the partially applied migration by deleting attendance rows.
+
+## Migration 0005 automated-absence source
+
+`0005_automated_absence_source` adds the `system` source choice and changes rows marked `location_result = 'system_daily_absence'` and `status = 'absent'` from `manual` to `system`. No rows are inserted or deleted. This distinguishes scheduled system absences from mentor-entered manual absences in new API responses and exports. Previously closed monthly report snapshots are immutable and are not rewritten; regenerate only through the existing approved report-reopen workflow if corrected historical export labels are required.
 
 ## Required approval before production
 

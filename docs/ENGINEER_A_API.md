@@ -64,7 +64,7 @@ Requires student token, QR token (or version-1 QR envelope in `qr_payload`), and
 
 Success (`201`): `{ "success": true, "attendance": <AttendanceSerializer> }`.
 
-The serializer fields are `id`, `full_name`, `username`, `student_id`, `campus`, `campus_name`, `track_name`, `cohort_name`, `record_kind`, `session_type`, `attendance_action`, `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `status_label`, `source`, `source_label`, `location_verified`, `location_accuracy_m`, and `location_distance_m`. `record_kind` is additive: `attendance` for present/late rows, `system_absence` for generated absences, `manual_absence` for mentor-entered absences.
+The serializer fields are `id`, `full_name`, `username`, `student_id`, `campus`, `campus_name`, `track_name`, `cohort_name`, `record_kind`, `session_type`, `attendance_action`, `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `status_label`, `source`, `source_label`, `location_verified`, `location_accuracy_m`, and `location_distance_m`. `record_kind` is additive: `attendance` for present/late rows, `system_absence` for generated absences, `manual_absence` for mentor-entered absences. `source` is `qr`, `manual`, or `system`; automated daily absences use `source: "system"` / `source_label: "Automated system"` after migration 0005.
 
 The server validates signed QR token, 30-second expiry, active session and schedule, assigned campus, GPS accuracy, and geofence. If campus coordinates are missing, scanning fails closed with `403 location_unconfigured`.
 

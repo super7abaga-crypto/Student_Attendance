@@ -245,7 +245,7 @@ def _materialize_absences_locked(campus, day):
             track_name=student.track.name if student.track_id else "",
             cohort_name=student.cohort.name if student.cohort_id else "",
             session_type="evening", attendance_action="check_in", attendance_date=day,
-            status=AttendanceLog.Status.ABSENT, source=AttendanceLog.Source.MANUAL,
+            status=AttendanceLog.Status.ABSENT, source=AttendanceLog.Source.SYSTEM,
             location_verified=False, location_result="system_daily_absence")
         for student in missing
     ], ignore_conflicts=True)
@@ -288,12 +288,12 @@ def report_for(campus, year, month, actor=None):
         day += timedelta(days=1)
     logs = AttendanceLog.objects.filter(campus=campus, attendance_date__gte=start.date(), attendance_date__lt=end.date()).select_related("student__user").order_by("attendance_date", "student__user__username")
     output = io.StringIO(); writer = csv.writer(output)
-    writer.writerow(["full_name", "username", "student_id", "campus", "track", "cohort", "session_type", "attendance_action", "attendance_date", "scan_time_wat", "status", "source", "location_verified"])
+    writer.writerow(["full_name", "username", "student_id", "campus", "track", "cohort", "record_kind", "session_type", "attendance_action", "attendance_date", "scan_time_wat", "status", "source", "location_verified"])
     rows = []
     for a in logs:
         row = {"full_name": a.student.user.full_name, "username": a.student.user.username,
             "student_id": str(a.student_id), "campus": campus.name, "track": a.track_name,
-            "cohort": a.cohort_name, "session_type": a.session_type, "attendance_action": a.attendance_action,
+            "cohort": a.cohort_name, "record_kind": "system_absence" if a.location_result == "system_daily_absence" else "manual_absence" if a.status == AttendanceLog.Status.ABSENT else "attendance", "session_type": a.session_type, "attendance_action": a.attendance_action,
             "attendance_date": a.attendance_date.isoformat(), "scan_time_wat": a.scan_time_wat,
             "status": a.get_status_display(), "source": a.get_source_display(), "location_verified": a.location_verified}
         rows.append(row); writer.writerow([csv_safe(v) for v in row.values()])

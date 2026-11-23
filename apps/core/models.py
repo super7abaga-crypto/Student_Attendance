@@ -203,6 +203,7 @@ class AttendanceLog(models.Model):
     class Source(models.TextChoices):
         QR = "qr", "QR Scan"
         MANUAL = "manual", "Manual"
+        SYSTEM = "system", "Automated system"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="attendance_logs")
