@@ -227,7 +227,7 @@ class AttendanceLog(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["student", "attendance_date"], name="uniq_student_date_attendance")]
+        constraints = [models.UniqueConstraint(fields=["student", "attendance_date", "session_type"], name="uniq_student_date_session_attendance")]
         indexes = [models.Index(fields=["campus", "attendance_date"]), models.Index(fields=["campus", "status", "attendance_date"])]
         ordering = ["-scanned_at", "student__user__username"]
 

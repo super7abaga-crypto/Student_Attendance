@@ -5,6 +5,8 @@ Date: 23 November 2026 (Africa/Lagos)
 Branch: `feat/engineer-b-attendance`
 Workspace verification only; no staging or production environment was accessed.
 
+The checkpoint implementation and tests have since changed. The suite result below was recorded before the final manual-checkout validation and documentation edits, so it is historical evidence and must be rerun before a release review.
+
 ## Automated verification
 
 Commands run from the repository root:
@@ -21,7 +23,7 @@ git diff --check
 Results:
 
 - pytest: **46 passed, 1 skipped**.
-- Django test runner: **47 tests run, 1 skipped, 0 failures/errors**; the test database was destroyed afterward.
+- Django test runner: the most recent earlier run recorded **52 tests passed, 1 skipped**; the test database was destroyed afterward. This run predates the final working-tree edits noted above.
 - Django system check: no issues.
 - Migration check: no model changes detected.
 - Static collection dry run: 160 static files found and ready for collection.
@@ -34,8 +36,8 @@ Results:
 - Beat configuration tests cover the 15-minute UTC absence schedule and daily UTC monthly-close schedule.
 - Login and QR scan rate-limit tests verify HTTP 429 enforcement.
 - CSV test verifies export headers/content and apostrophe escaping for spreadsheet formulas. It also caught and fixed DRF treating `format=csv` as a renderer override (previously 404).
-- Absence serializer test confirms the additive `record_kind=system_absence` while legacy `session_type=evening` and `attendance_action=check_in` remain intact.
-- Existing migration tests run against the temporary test database and verify the 0004 historical-status conversion, retained rows, and duplicate-date abort behavior. No populated external database was used.
+- Migration tests verify the 0004 historical-status conversion, retained rows, and duplicate-date abort behavior. No populated external database was used.
+- Checkpoint tests were updated to cover separate morning/afternoon/evening records, checkout semantics, checkpoint-specific duplicates, and absence materialization. They have not been rerun against the final working tree yet.
 
 ## Deployment and staging evidence
 

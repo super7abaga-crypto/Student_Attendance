@@ -18,7 +18,7 @@ from .models import (AttendanceAdjustment, AttendanceLog, AuditLog, Campus, Mont
 DEFAULT_SCHEDULES = {
     "morning": (time(9, 0), time(9, 10), time(12, 0), "check_in"),
     "afternoon": (time(13, 0), time(13, 10), time(16, 0), "check_in"),
-    "evening": (time(17, 0), time(17, 10), time(20, 0), "check_in"),
+    "evening": (time(17, 0), time(17, 10), time(20, 0), "check_out"),
 }
 LOCATION_DENIED = "Attendance denied. You must be physically present within your assigned Learn2Earn campus to scan."
 QR_SALT = "learn2earn.attendance.qr.v1"
@@ -28,6 +28,13 @@ class QRValidationError(ValueError):
     def __init__(self, code, message):
         super().__init__(message)
         self.code = code
+
+
+class DuplicateAttendanceError(FileExistsError):
+    def __init__(self, session_type, attendance_date):
+        super().__init__("Attendance has already been recorded for this checkpoint.")
+        self.session_type = session_type
+        self.attendance_date = attendance_date
 
 
 class ScanLocationError(PermissionError):
@@ -196,7 +203,8 @@ def record_scan(*, student, token, latitude, longitude, accuracy, at=None, reque
         raise ScanLocationError(code,result=location_result,accuracy=accuracy,distance=distance,session_type=run.session_type)
     schedule = schedule_for(student.campus, run.session_type)
     local_now = timezone.localtime(now, timezone=ZoneInfo(student.campus.timezone))
-    status = status_for_attendance_time(schedule, local_now)
+    status = (AttendanceLog.Status.PRESENT if payload["attendance_action"] == "check_out"
+              else status_for_attendance_time(schedule, local_now))
     try:
         with transaction.atomic():
             log = AttendanceLog.objects.create(student=student, campus=student.campus,
@@ -206,72 +214,122 @@ def record_scan(*, student, token, latitude, longitude, accuracy, at=None, reque
                 latitude=latitude, longitude=longitude, location_accuracy_m=accuracy, location_distance_m=distance,
                 location_checked_at=now, location_result=location_result, session_run=run)
     except IntegrityError as exc:
-        raise FileExistsError("Attendance has already been recorded for today.") from exc
+        raise DuplicateAttendanceError(run.session_type, local_now.date()) from exc
     audit(student.user, "attendance.scan", campus=student.campus, obj=log,
           details={"status": status, "session_type": run.session_type, "source": "qr"}, request=request)
     return log
 
 
-def attendance_day_closed(campus, day, now=None):
-    """A daily absence becomes final after the last approved attendance window."""
+def attendance_session_closed(campus, day, session_type, now=None):
+    """Whether one checkpoint has closed in the campus's local timezone."""
     now = now or timezone.now()
     local_now = timezone.localtime(now, timezone=ZoneInfo(campus.timezone))
-    final_close = schedule_for(campus, "evening").close_time
-    return day < local_now.date() or (day == local_now.date() and local_now.timetz().replace(tzinfo=None) >= final_close)
+    close_time = schedule_for(campus, session_type).close_time
+    return day < local_now.date() or (day == local_now.date() and local_now.timetz().replace(tzinfo=None) >= close_time)
+
+
+def attendance_day_closed(campus, day, now=None):
+    """Whether all three campus-local attendance checkpoints have closed."""
+    return all(attendance_session_closed(campus, day, session, now) for session in DEFAULT_SCHEDULES)
 
 
 def materialize_absences(campus, day, now=None):
-    """Persist one Absent record for enrolled students with no daily attendance."""
-    if not attendance_day_closed(campus, day, now):
+    """Persist a separate Absent record for each missed, closed checkpoint."""
+    if not any(attendance_session_closed(campus, day, session, now) for session in DEFAULT_SCHEDULES):
         return 0
-    # Serialize concurrent task/API materialization for this campus. The
-    # database uniqueness constraint remains the final protection against a
-    # concurrent scan or writer inserting the same student's daily row.
+    # Serialize task/API materialization per campus. Session-level uniqueness
+    # remains the final protection against a concurrent scan or task run.
     with transaction.atomic():
         campus = Campus.objects.select_for_update().get(pk=campus.pk)
-        if not attendance_day_closed(campus, day, now):
+        if not any(attendance_session_closed(campus, day, session, now) for session in DEFAULT_SCHEDULES):
             return 0
-        return _materialize_absences_locked(campus, day)
+        return _materialize_absences_locked(campus, day, now)
 
 
-def _materialize_absences_locked(campus, day):
+def _materialize_absences_locked(campus, day, now=None):
     students = Student.objects.filter(campus=campus, active=True, user__is_active=True, registration_date__lte=day)
-    existing = set(AttendanceLog.objects.filter(campus=campus, attendance_date=day).values_list("student_id", flat=True))
-    missing = [student for student in students if student.pk not in existing]
-    if not missing:
+    student_rows = list(students.select_related("track", "cohort"))
+    if not student_rows:
         return 0
-    AttendanceLog.objects.bulk_create([
-        AttendanceLog(student=student, campus=campus,
-            track_name=student.track.name if student.track_id else "",
-            cohort_name=student.cohort.name if student.cohort_id else "",
-            session_type="evening", attendance_action="check_in", attendance_date=day,
-            status=AttendanceLog.Status.ABSENT, source=AttendanceLog.Source.SYSTEM,
-            location_verified=False, location_result="system_daily_absence")
-        for student in missing
-    ], ignore_conflicts=True)
-    return len(missing)
+    existing = set(AttendanceLog.objects.filter(campus=campus, attendance_date=day).values_list("student_id", "session_type"))
+    rows = []
+    for session, (_start, _late, _close, action) in DEFAULT_SCHEDULES.items():
+        if not attendance_session_closed(campus, day, session, now):
+            continue
+        for student in student_rows:
+            if (student.pk, session) in existing:
+                continue
+            rows.append(AttendanceLog(
+                student=student, campus=campus,
+                track_name=student.track.name if student.track_id else "",
+                cohort_name=student.cohort.name if student.cohort_id else "",
+                session_type=session, attendance_action=action, attendance_date=day,
+                status=AttendanceLog.Status.ABSENT, source=AttendanceLog.Source.SYSTEM,
+                location_verified=False, location_result="system_missing_checkpoint"))
+    if not rows:
+        return 0
+    AttendanceLog.objects.bulk_create(rows, ignore_conflicts=True)
+    return len(rows)
 
 
 def attended_sessions(campus, day, now=None):
-    # Compatibility field for the mentor response. Daily attendance has one close point.
-    return ["daily"] if attendance_day_closed(campus, day, now) else []
+    return [session for session in DEFAULT_SCHEDULES if attendance_session_closed(campus, day, session, now)]
 
 
 def summary_for(campus, day, now=None):
     now = now or timezone.now(); materialize_absences(campus, day, now)
     students = Student.objects.filter(campus=campus, active=True, user__is_active=True, registration_date__lte=day)
-    total = students.count(); closed = attendance_day_closed(campus, day, now)
+    total = students.count()
     logs = AttendanceLog.objects.filter(campus=campus, attendance_date=day)
-    present = logs.filter(status__in=[AttendanceLog.Status.PRESENT, AttendanceLog.Status.LATE]).count()
-    late = logs.filter(status=AttendanceLog.Status.LATE).count()
-    missed = logs.filter(status=AttendanceLog.Status.ABSENT).count()
-    expected = total if closed else 0
-    return {"active_students": total, "present": present, "late": late,
-        "on_time": logs.filter(status=AttendanceLog.Status.PRESENT).count(),
-        "absent": missed, "not_checked_out": 0,
-        "attendance_percentage": round((present / expected) * 100, 1) if expected else None,
-        "completed_sessions": ["daily"] if closed else [], "morning_check_ins": logs.filter(session_type="morning").exclude(status="absent").count(),
-        "afternoon_check_ins": logs.filter(session_type="afternoon").exclude(status="absent").count(), "evening_check_outs": logs.filter(session_type="evening").exclude(status="absent").count()}
+    by_student = {}
+    for row in logs.values("student_id", "session_type", "attendance_action", "status", "location_result"):
+        by_student.setdefault(row["student_id"], {})[row["session_type"]] = row
+
+    daily = {"present": 0, "late": 0, "absent": 0, "incomplete": 0, "pending": 0}
+    not_checked_out = 0
+    for student in students.values_list("pk", flat=True):
+        sessions = by_student.get(student, {})
+        # Preserve historical system-created whole-day absence rows as daily absences.
+        if any(row["location_result"] == "system_daily_absence" for row in sessions.values()):
+            daily["absent"] += 1
+            continue
+        morning = sessions.get("morning")
+        afternoon = sessions.get("afternoon")
+        evening = sessions.get("evening")
+        morning_ok = bool(morning and morning["attendance_action"] == "check_in" and morning["status"] in (AttendanceLog.Status.PRESENT, AttendanceLog.Status.LATE))
+        afternoon_ok = bool(afternoon and afternoon["attendance_action"] == "check_in" and afternoon["status"] in (AttendanceLog.Status.PRESENT, AttendanceLog.Status.LATE))
+        checkout_ok = bool(evening and evening["attendance_action"] == "check_out" and evening["status"] != AttendanceLog.Status.ABSENT)
+        if morning_ok and afternoon_ok and checkout_ok:
+            daily["late" if AttendanceLog.Status.LATE in (morning["status"], afternoon["status"]) else "present"] += 1
+        elif not morning_ok and not afternoon_ok and attendance_session_closed(campus, day, "morning", now) and attendance_session_closed(campus, day, "afternoon", now):
+            daily["absent"] += 1
+        elif any((morning_ok, afternoon_ok, checkout_ok)):
+            daily["incomplete"] += 1
+            if (morning_ok or afternoon_ok) and attendance_session_closed(campus, day, "evening", now) and not checkout_ok:
+                not_checked_out += 1
+        else:
+            daily["pending"] += 1
+
+    checkpoint_summary = {}
+    for session, (_start, _late, _close, action) in DEFAULT_SCHEDULES.items():
+        rows = logs.filter(session_type=session)
+        checkpoint_summary[session] = {
+            "attendance_action": action,
+            "present": rows.filter(status=AttendanceLog.Status.PRESENT).count(),
+            "late": rows.filter(status=AttendanceLog.Status.LATE).count(),
+            "absent": rows.filter(status=AttendanceLog.Status.ABSENT).count(),
+            "closed": attendance_session_closed(campus, day, session, now),
+        }
+    completed = daily["present"] + daily["late"]
+    day_closed = attendance_day_closed(campus, day, now)
+    return {"active_students": total, "present": daily["present"], "late": daily["late"],
+        "on_time": daily["present"], "absent": daily["absent"], "incomplete": daily["incomplete"],
+        "pending": daily["pending"], "not_checked_out": not_checked_out,
+        "attendance_percentage": round((completed / total) * 100, 1) if day_closed and total else None,
+        "completed_sessions": attended_sessions(campus, day, now), "checkpoints": checkpoint_summary,
+        "morning_check_ins": checkpoint_summary["morning"]["present"] + checkpoint_summary["morning"]["late"],
+        "afternoon_check_ins": checkpoint_summary["afternoon"]["present"] + checkpoint_summary["afternoon"]["late"],
+        "evening_check_outs": checkpoint_summary["evening"]["present"] + checkpoint_summary["evening"]["late"]}
 
 
 def csv_safe(value):
@@ -293,7 +351,7 @@ def report_for(campus, year, month, actor=None):
     for a in logs:
         row = {"full_name": a.student.user.full_name, "username": a.student.user.username,
             "student_id": str(a.student_id), "campus": campus.name, "track": a.track_name,
-            "cohort": a.cohort_name, "record_kind": "system_absence" if a.location_result == "system_daily_absence" else "manual_absence" if a.status == AttendanceLog.Status.ABSENT else "attendance", "session_type": a.session_type, "attendance_action": a.attendance_action,
+            "cohort": a.cohort_name, "record_kind": "system_absence" if a.source == AttendanceLog.Source.SYSTEM or a.location_result == "system_daily_absence" else "manual_absence" if a.status == AttendanceLog.Status.ABSENT else "attendance", "session_type": a.session_type, "attendance_action": a.attendance_action,
             "attendance_date": a.attendance_date.isoformat(), "scan_time_wat": a.scan_time_wat,
             "status": a.get_status_display(), "source": a.get_source_display(), "location_verified": a.location_verified}
         rows.append(row); writer.writerow([csv_safe(v) for v in row.values()])
@@ -335,6 +393,8 @@ def manual_adjustment(*, attendance, actor, new_status, reason, request=None):
         raise ValueError("This month's report is closed. An administrator must reopen it before correcting historical attendance.")
     if new_status not in AttendanceLog.Status.values or not reason.strip():
         raise ValueError("Choose a valid status and enter a reason.")
+    if attendance.attendance_action == "check_out" and new_status == AttendanceLog.Status.LATE:
+        raise ValueError("Checkout records cannot be marked late; record the checkout time or mark it absent.")
     old = attendance.status
     adjustment = AttendanceAdjustment.objects.create(attendance=attendance, student=attendance.student,
         campus=attendance.campus, mentor=actor, original_status=old, new_status=new_status, reason=reason.strip())

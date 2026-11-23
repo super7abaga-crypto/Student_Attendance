@@ -25,11 +25,11 @@ celery -A config worker --loglevel=INFO
 celery -A config beat --loglevel=INFO
 ```
 
-Celery Beat runs in UTC. It checks for daily absences every 15 minutes; the task evaluates each campus's own IANA timezone and evening close. It checks monthly report closure daily at 01:15 UTC so local month boundaries are not tied to Lagos. Absence materialization considers only the prior campus-local day for bounded catch-up and the current local day after its configured close. A database uniqueness constraint on student/date plus campus-row serialization makes repeated runs safe. Monthly reports are unique per campus/year/month; source attendance is never deleted. A manual close is available for completed periods only. Reopening a report never erases its audit trail.
+Celery Beat runs in UTC. Every 15 minutes it checks the prior and current campus-local dates and materializes absent records only for checkpoints whose configured windows have closed. A database uniqueness constraint on student/date/checkpoint plus campus-row serialization makes repeated runs safe. It closes monthly reports daily at 01:15 UTC so local month boundaries are not tied to Lagos. Monthly reports are unique per campus/year/month; source attendance is never deleted. A manual close is available for completed periods only. Reopening a report never erases its audit trail.
 
 The reverse proxy must redirect HTTP to HTTPS and pass `X-Forwarded-Proto: https`. Configure the host's liveness/readiness path as `GET /health/`. Swagger is available at `/api/v1/docs/`; protect or disable public schema routes if deployment policy requires it. Static files are collected to `STATIC_ROOT` and served by WhiteNoise; verify `/static/student/styles.css` returns HTTP 200 after collection.
 
-The hosting provider has not yet been selected. `Procfile` and these commands are portable process definitions, not a provider-specific Blueprint. Use [the staging checklist](STAGING_CHECKLIST.md) to validate a host before using real data. Never attach this branch's migration command to production auto-release until migration 0004's safety gate has been reviewed and approved.
+The hosting provider has not yet been selected. `Procfile` and these commands are portable process definitions, not a provider-specific Blueprint. Use [the staging checklist](STAGING_CHECKLIST.md) to validate a host before using real data. Never attach this branch's migration command to production auto-release until the migration 0004 duplicate/data-conversion safety gate and migration 0006 checkpoint/checkout behavior have been reviewed and approved.
 
 ## Backups
 

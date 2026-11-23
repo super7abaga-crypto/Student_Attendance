@@ -4,23 +4,25 @@ This document describes the checked-in Django implementation. API paths below ar
 
 ## Attendance and time rules
 
-`AttendanceLog` has a database constraint allowing **one record per student per `attendance_date`**, regardless of QR window. The date is calculated in the assigned campus's IANA timezone. The intended pilot timezone is `Africa/Lagos` (WAT); configure the campus to that timezone for WAT dates. Status values stored by the backend are exactly `present`, `late`, and `absent`.
+The database allows one record per student, campus-local date, and checkpoint. The three checkpoints are morning check-in, afternoon check-in, and evening check-out. A duplicate scan in the same checkpoint returns `409 duplicate_attendance`; the same student may scan at later checkpoints on that date. Status values are `present`, `late`, and `absent`.
 
-QR sessions remain separate operating windows. The defaults are:
+For the default Africa/Lagos schedule, morning and afternoon scans are `present` through the configured `late_after` minute, and `late` from the next minute onward (09:11 and 13:11 by default). Evening is a checkout and is never marked late. Each missed checkpoint is persisted as `absent` after its own close time. The daily summary marks a student `present` only after all three checkpoints, `late` if all three are complete and either check-in is late, `incomplete` if at least one checkpoint is completed but not all, and `absent` if both check-in windows close without a successful check-in. It marks `pending` before then when no successful checkpoint is recorded.
 
-| Session | Opens | Last on-time minute (`late_after`) | Late starts | Closes (exclusive) | Action |
+The defaults are:
+
+| Checkpoint | Opens | Last on-time minute (`late_after`) | Late starts | Closes (exclusive) | Action |
 |---|---:|---:|---:|---:|---|
 | `morning` | 09:00 | 09:10 | 09:11 | 12:00 | `check_in` |
 | `afternoon` | 13:00 | 13:10 | 13:11 | 16:00 | `check_in` |
-| `evening` | 17:00 | 17:10 | 17:11 | 20:00 | `check_in` |
+| `evening` | 17:00 | N/A | N/A | 20:00 | `check_out` |
 
-The configured `late_after` minute is on time for the **whole minute**. For example, with `late_after=09:10`, scans through 09:10:59.999999 WAT are `present`; scans from 09:11:00 WAT are `late`. The same rule applies at 13:11 and 17:11. A scan before the session opens or at/after close is rejected as `session_inactive`. Campus schedules can override the defaults; `late_after` means the last on-time minute.
+Morning and afternoon scans through the full 09:10/13:10 minute are `present`; lateness starts at 09:11/13:11. Evening checkout records the timestamp and is not marked late. A scan before a checkpoint opens or at/after its close is rejected as `session_inactive`. Campus schedules can override these windows.
 
-A successful scan in any one window creates the day's attendance row and stores the window's `session_type`. A successful scan in another window that same date is rejected by the daily unique constraint. The evening window does not represent a separate checkout record in the current database policy. For an active student registered on or before a date with no row, a single `absent` row is materialized after the evening window closes; system-created absences use `session_type: "evening"` and `attendance_action: "check_in"`.
+After each checkpoint closes, the scheduled task creates an `absent` row when an enrolled student has no record for that checkpoint. The mentor summary counts a day as `present` when all three checkpoints are complete on time, `late` when all three are complete and a check-in was late, `incomplete` when there is some attendance but a checkpoint is missing, and `absent` when neither check-in was recorded after both check-in windows have closed. `pending` represents a day that is not yet complete and has no attendance evidence. Mentors can correct individual checkpoint records through the audited workflow.
 
-Celery Beat checks for absences every 15 minutes in UTC. The task computes dates and the evening close in each campus's configured timezone. It considers the prior campus-local date as a bounded catch-up and the current campus-local date only after the configured close. The monthly report task runs daily at 01:15 UTC, then derives each campus's preceding local month. Requests for a completed day's mentor summary or attendance list and monthly report generation can also materialize missing absences. Monthly report close stores snapshots; it does not delete attendance rows.
+Celery Beat checks in UTC every 15 minutes and evaluates each campus-local checkpoint close. It considers the prior local date for bounded catch-up and the current local date for newly closed checkpoints. Monthly report closure continues daily at 01:15 UTC. Reports store checkpoint rows in their snapshot and do not delete attendance data.
 
-For backward compatibility, a system-generated absence still returns `session_type: "evening"` and `attendance_action: "check_in"`; existing clients may depend on those required enum fields. These values are legacy placeholders. Clients should use `record_kind: "system_absence"` with `status: "absent"` to identify an automatic absence; mentor-entered absences use `record_kind: "manual_absence"`. A future API version can make session/action nullable or replace them with an absence-specific vocabulary after Partner A confirms compatibility.
+Historical whole-day absence rows retain their original session/action values. New missing-checkpoint rows use the checkpoint's actual action. Clients can use `record_kind: "system_absence"` with `status: "absent"` to identify system-generated rows; mentor-entered absences use `record_kind: "manual_absence"`.
 
 ## Authentication and permissions
 
@@ -64,7 +66,7 @@ Requires student token, QR token (or version-1 QR envelope in `qr_payload`), and
 
 Success (`201`): `{ "success": true, "attendance": <AttendanceSerializer> }`.
 
-The serializer fields are `id`, `full_name`, `username`, `student_id`, `campus`, `campus_name`, `track_name`, `cohort_name`, `record_kind`, `session_type`, `attendance_action`, `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `status_label`, `source`, `source_label`, `location_verified`, `location_accuracy_m`, and `location_distance_m`. `record_kind` is additive: `attendance` for present/late rows, `system_absence` for generated absences, `manual_absence` for mentor-entered absences. `source` is `qr`, `manual`, or `system`; automated daily absences use `source: "system"` / `source_label: "Automated system"` after migration 0005.
+The serializer fields are `id`, `full_name`, `username`, `student_id`, `campus`, `campus_name`, `track_name`, `cohort_name`, `record_kind`, `session_type`, `attendance_action`, `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `status_label`, `source`, `source_label`, `location_verified`, `location_accuracy_m`, and `location_distance_m`. `record_kind` is additive: `attendance` for present/late rows, `system_absence` for generated checkpoint absences, `manual_absence` for mentor-entered absences. `source` is `qr`, `manual`, or `system`; generated checkpoint absences use `source: "system"` / `source_label: "Automated system"` after migration 0005.
 
 The server validates signed QR token, 30-second expiry, active session and schedule, assigned campus, GPS accuracy, and geofence. If campus coordinates are missing, scanning fails closed with `403 location_unconfigured`.
 
@@ -82,7 +84,7 @@ The server validates signed QR token, 30-second expiry, active session and sched
 | 403 | `location_unconfigured` | Scanning is blocked until campus coordinates are configured. |
 | 403 | `location_unavailable` / `invalid_location` / `gps_required` | Obtain a valid location reading and retry. |
 | 404 | `student_not_found` | Contact an administrator to repair the student profile. |
-| 409 | `duplicate_attendance` | The existing same-date row is retained; no second window can create another row. Do not keep rescanning. Check `GET /student/attendance-history/`; ask a mentor to review/correct the existing record through the audited manual workflow if necessary. Response message: `Attendance has already been recorded for today.` |
+| 409 | `duplicate_attendance` | A record already exists for this student, campus-local date, and checkpoint. The response includes the existing serialized record in `attendance`; display its session and time, then let the student continue to a later checkpoint. A duplicate in one checkpoint does not block another checkpoint that day. |
 
 ### `POST /auth/logout/`
 
@@ -108,9 +110,9 @@ Except for public login, these endpoints require staff authentication and campus
 | `GET /mentor/qr/current/?campus_id=<uuid>&session_type=morning` | Mints a signed QR envelope valid for 30 seconds. Response includes `version`, `token`, `expires_at`, `qr_payload`, `qr_image_url`, `session_id`, `campus`, `campus_id`, `session_type`, `attendance_action`, `state`, `expires_in_seconds`. No active session/window is `409 session_closed` or `409 outside_session_window`. |
 | `GET /mentor/qr/image/?token=<signed-token>` | No-store PNG for an authorized staff member with access to the QR's campus. |
 | `POST /mentor/qr/end/` with `{session_id}` | Closes the run and revokes outstanding QR tokens. Unknown run is `404 session_not_found`. |
-| `GET /mentor/attendance/?campus_id=<uuid>[&date=YYYY-MM-DD&date_from=…&date_to=…&status=present|late|absent&session_type=…&source=…&track_name=…&cohort_name=…&search=…]` | Paginated response (`count`, `next`, `previous`, `results`), 50 rows/page. Date-specific calls materialize completed-day absences first. `format=csv` returns protected CSV, requires export permission, and escapes spreadsheet formula values with a leading apostrophe. |
-| `GET /mentor/attendance/summary/?campus_id=<uuid>[&date=YYYY-MM-DD]` | `{campus: <CampusSerializer>, date, timezone, summary: <object>}`. Summary keys: `active_students`, `present`, `late`, `on_time`, `absent`, `not_checked_out`, `attendance_percentage`, `completed_sessions`, `morning_check_ins`, `afternoon_check_ins`, `evening_check_outs`. `on_time` counts `present` rows; current daily mode reports completed session `daily` after evening close and `not_checked_out: 0`. |
-| `POST /mentor/attendance/manual/` | Audited status correction or daily-row creation. A reason is mandatory. The same daily uniqueness applies; duplicate is `409 duplicate_attendance`. |
+| `GET /mentor/attendance/?campus_id=<uuid>[&date=YYYY-MM-DD&date_from=…&date_to=…&status=present|late|absent&session_type=…&source=…&track_name=…&cohort_name=…&search=…]` | Paginated response (`count`, `next`, `previous`, `results`), 50 rows/page. Date-specific calls materialize absences for closed checkpoints. `format=csv` returns protected CSV, requires export permission, and escapes spreadsheet formula values with a leading apostrophe. |
+| `GET /mentor/attendance/summary/?campus_id=<uuid>[&date=YYYY-MM-DD]` | `{campus: <CampusSerializer>, date, timezone, summary: <object>}`. Summary keys include daily `active_students`, `present`, `late`, `absent`, `incomplete`, `pending`, `not_checked_out`, `attendance_percentage`, `completed_sessions`; checkpoint counts are in `checkpoints.morning`, `.afternoon`, and `.evening`. `morning_check_ins` and `afternoon_check_ins` count successful check-ins; `evening_check_outs` counts successful check-outs. |
+| `POST /mentor/attendance/manual/` | Audited status correction or per-checkpoint row creation. A reason is mandatory. A student/date/checkpoint duplicate returns `409 duplicate_attendance`. |
 | `POST /mentor/attendance/location-override/` | Mentor/admin audited override requires a matching location rejection from the same session within 15 minutes, today's campus-local date, an open monthly report, a reason, and campus correction access. |
 | `GET /admin/reports/?campus_id=<uuid>&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD` | `{results: [{campus, records, present, late, absent, by_session}]}` for accessible campuses. |
 | `GET /admin/monthly-reports/?campus_id=<uuid>` | `{results: [...]}` monthly-report metadata. |
@@ -118,7 +120,7 @@ Except for public login, these endpoints require staff authentication and campus
 | `POST /admin/monthly-reports/{report_id}/reopen/` | Administrator reopens a report with audit trail. |
 | `GET /admin/reports/{report_id}/csv/` and `/json/` | Protected monthly report downloads; JSON export requires campus export permission. |
 
-Campus-related error codes include `campus_not_found` as a validation error, permission denied as HTTP `403`, `attendance_not_found`/`student_not_found`/`report_not_found`/`session_not_found` as HTTP `404`, and `duplicate_attendance` as HTTP `409` for daily attendance conflicts. QR/session errors are listed above. Generic authentication failures follow DRF's `401` response.
+Campus-related error codes include `campus_not_found` as a validation error, permission denied as HTTP `403`, `attendance_not_found`/`student_not_found`/`report_not_found`/`session_not_found` as HTTP `404`, and `duplicate_attendance` as HTTP `409` for a duplicate student/date/checkpoint. The 409 response includes the existing checkpoint in `attendance` when found. QR/session errors are listed above. Generic authentication failures follow DRF's `401` response.
 
 ## OpenAPI
 

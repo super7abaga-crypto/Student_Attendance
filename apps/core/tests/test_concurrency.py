@@ -14,9 +14,9 @@ from apps.core.services import mint_qr, record_scan
 
 @override_settings(QR_SIGNING_SECRET="concurrency-test-secret-" + "x" * 48)
 class ConcurrentAttendanceScanTests(TransactionTestCase):
-    """Exercise the unique daily constraint with genuinely separate DB sessions."""
+    """Exercise per-checkpoint uniqueness with genuinely separate DB sessions."""
 
-    def test_simultaneous_scans_create_one_daily_row(self):
+    def test_simultaneous_scans_create_one_row_for_the_same_checkpoint(self):
         if connection.vendor != "postgresql":
             self.skipTest("Concurrent insert behavior is exercised on PostgreSQL; SQLite locking differs.")
 
@@ -50,4 +50,4 @@ class ConcurrentAttendanceScanTests(TransactionTestCase):
             outcomes = list(executor.map(lambda _index: scan_once(), range(2)))
 
         self.assertCountEqual(outcomes, ["created", "duplicate"])
-        self.assertEqual(AttendanceLog.objects.filter(student=student, attendance_date=at.date()).count(), 1)
+        self.assertEqual(AttendanceLog.objects.filter(student=student, attendance_date=at.date(), session_type="morning").count(), 1)

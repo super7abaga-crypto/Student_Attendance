@@ -30,8 +30,8 @@ For a fresh installation the first Django superuser is created with `createsuper
 - Campus memberships and role/campus scoping for campus administrators, mentors and read only attendance officers.
 - Server side HMAC-SHA256 QR tokens with campus, session, action, run ID, timestamps and nonce; 30 second lifetime and immediate revocation on session close.
 - Morning, afternoon and evening QR windows, WAT lateness evaluation and campus geofence verification with GPS accuracy.
-- Database unique constraint for one student record per WAT calendar date, manual corrections with reasons and audit history.
-- One daily attendance result: Present through 9:10 AM, 1:10 PM or 5:10 PM in the selected window; Late from 9:11 AM, 1:11 PM or 5:11 PM. Unrecorded active students become Absent after the evening window closes.
+- Database unique constraint for one student record per campus-local date and checkpoint, with manual corrections and audit history.
+- Three attendance checkpoints per day: morning and afternoon check-in, evening check-out. Morning/afternoon are Present through 9:10 AM / 1:10 PM and Late from 9:11 AM / 1:11 PM. Missed checkpoints are marked Absent after their windows close; evening checkout is recorded without check-in lateness.
 - Campus and student administration, roster CSV import/export, dashboard polling, attendance CSV, monthly CSV/JSON reports and Celery Beat monthly closure.
 - API schema at `/api/v1/schema/`, Swagger at `/api/v1/docs/`, and Redoc at `/api/v1/redoc/`.
 
@@ -43,6 +43,6 @@ Production uses Gunicorn behind a TLS reverse proxy, PostgreSQL, Redis, a Celery
 
 ## Verification
 
-Run `python manage.py migrate`, `python manage.py check`, and `python -m pytest -q`. The included suite checks WAT cutoffs, daily duplicate constraints across attendance windows, end-of-day absence creation, campus geofencing, exact QR expiry, legacy password migration and private static file handling.
+Run `python manage.py migrate`, `python manage.py check`, and `python -m pytest -q`. The included suite checks WAT check-in cutoffs, per-checkpoint duplicate constraints, separate evening checkout, per-session absence creation, campus geofencing, exact QR expiry, legacy password migration and private static file handling.
 
 Browser GPS is a useful on campus check, not proof against a determined GPS spoofer. The API records location accuracy and rejects a fix unless the campus distance plus reported accuracy fits within the approved radius. A future trusted Wi-Fi or staffed physical kiosk check can add another signal.

@@ -90,7 +90,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
     def get_record_kind(self, obj) -> str:
         if obj.status == AttendanceLog.Status.ABSENT:
-            if obj.location_result == "system_daily_absence":
+            if obj.source == AttendanceLog.Source.SYSTEM or obj.location_result == "system_daily_absence":
                 return "system_absence"
             return "manual_absence"
         return "attendance"

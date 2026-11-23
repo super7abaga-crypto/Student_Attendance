@@ -23,8 +23,9 @@ class AttendanceAPITests(TestCase):
         self.student=Student.objects.create(user=self.user,campus=self.campus)
         SessionSchedule.objects.create(campus=self.campus,session_type="morning",start_time=time(9),late_after=time(9,10),close_time=time(12))
 
-    def make_token(self,at):
-        run,_=SessionRun.objects.get_or_create(campus=self.campus,attendance_date=at.date(),session_type="morning",defaults={"attendance_action":"check_in","started_by":self.user})
+    def make_token(self,at,session="morning"):
+        action="check_out" if session=="evening" else "check_in"
+        run,_=SessionRun.objects.get_or_create(campus=self.campus,attendance_date=at.date(),session_type=session,defaults={"attendance_action":action,"started_by":self.user})
         with patch("apps.core.services.timezone.now",return_value=at): return mint_qr(run)["token"]
 
     def test_scan_uses_authenticated_student_not_submitted_username(self):
@@ -78,7 +79,24 @@ class AttendanceAPITests(TestCase):
             duplicate=self.client.post("/api/v1/attendance/scan/",body,format="json")
         self.assertEqual(first.status_code,201)
         self.assertEqual(duplicate.status_code,409)
+        self.assertEqual(duplicate.data["attendance"]["session_type"],"morning")
         self.assertTrue(AuditLog.objects.filter(action="attendance.duplicate_scan",actor=self.user).exists())
+
+    def test_same_day_scans_in_other_checkpoints_are_allowed_and_evening_checks_out(self):
+        self.client.force_authenticate(user=self.user)
+        for session,at,expected_action in (
+            ("morning",time(9,5),"check_in"),
+            ("afternoon",time(13,5),"check_in"),
+            ("evening",time(17,5),"check_out"),
+        ):
+            moment=timezone.make_aware(datetime.combine(timezone.localdate(),at),ZoneInfo("Africa/Lagos"))
+            token=self.make_token(moment,session)
+            body={"qr_payload":token,"latitude":6.5244,"longitude":3.3792,"accuracy":10}
+            with patch("django.utils.timezone.now",return_value=moment):
+                response=self.client.post("/api/v1/attendance/scan/",body,format="json")
+            self.assertEqual(response.status_code,201,response.data)
+            self.assertEqual(response.data["attendance"]["attendance_action"],expected_action)
+        self.assertEqual(self.student.attendance_logs.filter(attendance_date=timezone.localdate()).count(),3)
 
     def test_absence_cannot_be_manually_created_before_session_close(self):
         mentor=User.objects.create_user(username="admin",password="a-very-long-mentor-password",role=User.Role.CAMPUS_ADMIN,assigned_campus=self.campus,is_staff=True)

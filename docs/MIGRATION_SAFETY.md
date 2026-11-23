@@ -77,3 +77,18 @@ If the production migration is ever approved and fails, stop deployment activity
 ## Required approval before production
 
 The release owner must approve: zero-duplicate query output; identified migration version and reviewed diff; encrypted backup checksum; successful isolated restore rehearsal; successful staging migration and data comparison; client/export handling for `present`; rollback owner and recovery window; and the production maintenance window. No production migration is authorized by this document.
+
+## Migration 0006 checkpoint attendance
+
+Migration `0006_session_checkpoint_attendance` changes the uniqueness key from one row per student/date to one row per student/date/checkpoint. It **does not delete or rewrite any AttendanceLog rows**. The migration revokes unexpired QR tokens for open evening sessions and changes only open evening `SessionRun` rows from `check_in` to `check_out`; closed historical session runs and historical attendance actions remain unchanged. Fresh evening QR tokens use the checkout action.
+
+Before migration, this query confirms there is no pre-existing duplicate for the new key (the prior daily constraint normally makes this necessarily zero):
+
+```sql
+SELECT student_id, attendance_date, session_type, COUNT(*) AS rows
+FROM core_attendancelog
+GROUP BY student_id, attendance_date, session_type
+HAVING COUNT(*) > 1;
+```
+
+Back up with the same encrypted `pg_dump` procedure above and rehearse migration on an isolated restored copy. Compare total attendance row counts, primary keys, status values and historical session/action values before and after. After deploying this version, a single day can contain up to three system-generated absence rows (one per missed checkpoint), alongside scans for checkpoints completed. Therefore, rollback to code/schema enforcing one row per date may fail once a second checkpoint has been written. If rollback is required after checkpoint data exists, restore the verified pre-migration backup into an isolated database and follow the release owner's recovery plan; do not delete records to force a downgrade. No production database migration was run or authorized here.

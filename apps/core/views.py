@@ -208,7 +208,10 @@ class AttendanceScanView(APIView):
             log = record_scan(student=student, token=token, latitude=request.data["latitude"], longitude=request.data["longitude"], accuracy=request.data["accuracy"], request=request)
         except FileExistsError as exc:
             audit(request.user, "attendance.duplicate_scan", campus=student.campus, obj=student, request=request)
-            return Response({"success":False,"code":"duplicate_attendance","message":str(exc)},status=409)
+            existing=AttendanceLog.objects.filter(student=student,attendance_date=getattr(exc,"attendance_date",None),session_type=getattr(exc,"session_type",None)).first()
+            body={"success":False,"code":"duplicate_attendance","message":str(exc)}
+            if existing: body["attendance"]=AttendanceSerializer(existing).data
+            return Response(body,status=409)
         except ScanLocationError as exc:
             audit(request.user, "attendance.location_rejected", campus=student.campus, obj=student,
                   details={"result":exc.result,"accuracy_m":exc.accuracy,"distance_m":exc.distance,"session_type":exc.session_type},request=request)
@@ -478,7 +481,7 @@ class MentorAttendanceView(APIView):
         from rest_framework.pagination import PageNumberPagination
         items=list(qs)
         if day:
-            # This materializes final daily absences after the evening window, so
+            # This materializes any closed missing checkpoints, so
             # the API and CSV export always return the same persisted records.
             summary_for(campus, day, timezone.now())
             items=list(qs)
@@ -487,7 +490,7 @@ class MentorAttendanceView(APIView):
             out=io.StringIO(); writer=csv.writer(out); writer.writerow(["full_name","username","student_id","campus","track","cohort","record_kind","session_type","attendance_action","attendance_date","scan_time_wat","status","source","location_verified"])
             for item in items:
                 if isinstance(item,dict): row=item
-                else: row={"full_name":item.student.user.full_name,"username":item.student.user.username,"student_id":item.student_id,"campus":item.campus.name,"track":item.track_name,"cohort":item.cohort_name,"record_kind":"system_absence" if item.location_result == "system_daily_absence" else "manual_absence" if item.status == AttendanceLog.Status.ABSENT else "attendance","session_type":item.session_type,"attendance_action":item.attendance_action,"attendance_date":item.attendance_date,"scan_time_wat":item.scan_time_wat,"status":item.get_status_display(),"source":item.get_source_display(),"location_verified":item.location_verified}
+                else: row={"full_name":item.student.user.full_name,"username":item.student.user.username,"student_id":item.student_id,"campus":item.campus.name,"track":item.track_name,"cohort":item.cohort_name,"record_kind":"system_absence" if item.source == AttendanceLog.Source.SYSTEM or item.location_result == "system_daily_absence" else "manual_absence" if item.status == AttendanceLog.Status.ABSENT else "attendance","session_type":item.session_type,"attendance_action":item.attendance_action,"attendance_date":item.attendance_date,"scan_time_wat":item.scan_time_wat,"status":item.get_status_display(),"source":item.get_source_display(),"location_verified":item.location_verified}
                 writer.writerow([csv_safe(row.get(k,"")) for k in ("full_name","username","student_id","campus","track","cohort","record_kind","session_type","attendance_action","attendance_date","scan_time_wat","status","source","location_verified")])
             audit(request.user,"attendance.csv.export",campus=campus,details={"rows":len(items)},request=request)
             response=HttpResponse(out.getvalue(),content_type="text/csv; charset=utf-8"); response["Content-Disposition"]='attachment; filename="learn2earn-attendance.csv"'; response["X-Content-Type-Options"]="nosniff"; return response
@@ -541,15 +544,17 @@ class AttendanceManualView(APIView):
         day=day or timezone.localtime(timezone.now(),ZoneInfo(student.campus.timezone)).date()
         if day > timezone.localtime(timezone.now(),ZoneInfo(student.campus.timezone)).date(): raise ValidationError({"attendance_date":"Future attendance dates are not allowed."})
         if session not in DEFAULT_SCHEDULES or new_status not in AttendanceLog.Status.values: raise ValidationError("Choose a valid session and status.")
+        if session == "evening" and new_status == AttendanceLog.Status.LATE:
+            raise ValidationError({"status":"Evening checkout cannot be marked late; record it as present or absent."})
         schedule=schedule_for(student.campus,session)
         local_now=timezone.localtime(timezone.now(),ZoneInfo(student.campus.timezone))
-        if new_status==AttendanceLog.Status.ABSENT and day==local_now.date() and local_now.timetz().replace(tzinfo=None)<schedule_for(student.campus,"evening").close_time:
-            raise ValidationError({"status":"A student cannot be marked absent until the final attendance window has closed."})
+        if new_status==AttendanceLog.Status.ABSENT and day==local_now.date() and local_now.timetz().replace(tzinfo=None)<schedule.close_time:
+            raise ValidationError({"status":"A student cannot be marked absent until this checkpoint has closed."})
         if MonthlyReport.objects.filter(campus=student.campus,year=day.year,month=day.month,closed=True).exists():
             raise ValidationError({"detail":"This month's report is closed. An administrator must reopen it before correcting historical attendance."})
         try:
             with transaction.atomic():
-                log=AttendanceLog.objects.create(student=student,campus=student.campus,track_name=student.track.name if student.track_id else "",cohort_name=student.cohort.name if student.cohort_id else "",session_type=session,attendance_action="check_in",attendance_date=day,scanned_at=None if new_status==AttendanceLog.Status.ABSENT else timezone.now(),status=new_status,source=AttendanceLog.Source.MANUAL,location_verified=False,location_result="manual_override")
+                log=AttendanceLog.objects.create(student=student,campus=student.campus,track_name=student.track.name if student.track_id else "",cohort_name=student.cohort.name if student.cohort_id else "",session_type=session,attendance_action=DEFAULT_SCHEDULES[session][3],attendance_date=day,scanned_at=None if new_status==AttendanceLog.Status.ABSENT else timezone.now(),status=new_status,source=AttendanceLog.Source.MANUAL,location_verified=False,location_result="manual_override")
                 adjustment=AttendanceAdjustment.objects.create(attendance=log,student=student,campus=student.campus,mentor=request.user,original_status=AttendanceLog.Status.ABSENT,new_status=new_status,reason=reason)
                 audit(request.user,"attendance.manual_create",campus=student.campus,obj=log,reason=reason,details={"adjustment_id":str(adjustment.pk),"status":new_status},request=request)
         except IntegrityError:
@@ -583,10 +588,11 @@ class LocationOverrideView(APIView):
         failed=AuditLog.objects.filter(actor=student.user,campus=campus,action="attendance.location_rejected",created_at__gte=now-timedelta(minutes=15),details__result=original,details__session_type=session).exists()
         if not failed: raise ValidationError({"original_location_result":"No matching recent location failure was found for this student, campus and session."})
         if local.timetz().replace(tzinfo=None)<schedule.start_time or local.timetz().replace(tzinfo=None)>=schedule.close_time: raise ValidationError({"code":"outside_session_window","detail":"Session is outside its configured attendance window."})
-        status_value=status_for_attendance_time(schedule,local)
+        action=DEFAULT_SCHEDULES[session][3]
+        status_value=AttendanceLog.Status.PRESENT if action=="check_out" else status_for_attendance_time(schedule,local)
         try:
             with transaction.atomic():
-                log=AttendanceLog.objects.create(student=student,campus=campus,track_name=student.track.name if student.track_id else "",cohort_name=student.cohort.name if student.cohort_id else "",session_type=session,attendance_action="check_in",attendance_date=day,scanned_at=now,status=status_value,source=AttendanceLog.Source.MANUAL,location_verified=False,location_result="manual_override")
+                log=AttendanceLog.objects.create(student=student,campus=campus,track_name=student.track.name if student.track_id else "",cohort_name=student.cohort.name if student.cohort_id else "",session_type=session,attendance_action=action,attendance_date=day,scanned_at=now,status=status_value,source=AttendanceLog.Source.MANUAL,location_verified=False,location_result="manual_override")
                 adjustment=AttendanceAdjustment.objects.create(attendance=log,student=student,campus=campus,mentor=request.user,original_status=AttendanceLog.Status.ABSENT,new_status=status_value,reason=reason,location_override=True,original_location_result=original,override_result="approved_by_mentor")
                 audit(request.user,"attendance.location_override",campus=campus,obj=log,reason=reason,details={"adjustment_id":str(adjustment.pk),"original_location_result":original,"override_result":"approved_by_mentor","student_id":str(student.pk)},request=request)
         except IntegrityError: return Response({"success":False,"code":"duplicate_attendance","message":"An attendance record already exists for this session."},status=409)
