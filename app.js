@@ -36,11 +36,13 @@ const SESSION_LABELS = {
 };
 
 // Known backend status values are humanised for the badge; anything else is shown raw.
+// Canonical daily statuses are present / late / absent. `on_time` is only kept so
+// historical rows written before the daily policy still read naturally.
 const STATUS_LABELS = {
-  on_time: "On Time",   // Engineer B's authoritative value
+  present: "Present",
   late: "Late",
   absent: "Absent",
-  present: "Present",   // tolerated alias, not emitted by the backend
+  on_time: "On Time",   // legacy value, historical rows only
 };
 
 const state = {
@@ -51,6 +53,7 @@ const state = {
   dashboardMonth: "",
   scanner: null,
   scannerRunning: false,
+  scannerStarting: false,
   currentView: "dashboard",
   scanLocked: false,
   historyLoaded: false,
@@ -373,6 +376,8 @@ function showAuth() {
 }
 
 function showView(name) {
+  // Never leave the camera running behind another screen.
+  if (name !== "scanner") stopScanner();
   if (!$(`${name}View`)) name = "dashboard";
   state.currentView = name;
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
@@ -406,17 +411,23 @@ function todayWatKey() {
 
 // The existing record for today, read from history. Returns null when the history has
 // nothing for today (or cannot be loaded) so the caller can degrade gracefully.
-async function findTodaysRecord() {
-  try {
-    if (!state.records.length) await loadAttendance({ quiet: true });
-  } catch (_) {
-    return null;
-  }
+// Always read today's record from the server. A cached list can predate the scan that
+// just succeeded, and a duplicate must never be shown from stale data.
+async function fetchTodaysRecord() {
+  const payload = await apiRequest("/student/attendance-history/");
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.records) ? payload.records
+    : Array.isArray(payload?.results) ? payload.results
+    : [];
+  state.records = list;
+  state.historyLoaded = true;
+  renderDashboard();
+  renderHistory();
   const today = todayWatKey();
-  const todays = sortRecords(state.records).filter(
+  return sortRecords(list).filter(
     (record) => String(record.attendance_date || "").slice(0, 10) === today
-  );
-  return todays[0] || null;
+  )[0] || null;
 }
 
 function sortRecords(records) {
@@ -535,7 +546,8 @@ async function startScanner() {
     showScanNotice("Your previous scan is still being verified. Please wait.");
     return;
   }
-  if (state.scannerRunning) return;
+  if (state.scannerRunning || state.scannerStarting) return;
+  state.scannerStarting = true;
   try {
     if (!state.scanner) state.scanner = new window.Html5Qrcode("reader");
     const cameras = await window.Html5Qrcode.getCameras();
@@ -556,6 +568,8 @@ async function startScanner() {
       error?.message || "Could not start the camera. Allow camera access and use HTTPS, then try again.",
       { retry: true },
     );
+  } finally {
+    state.scannerStarting = false;
   }
 }
 
@@ -611,13 +625,25 @@ function getFreshPosition() {
   });
 }
 
+// Attendance is daily: a second scan on the same campus-local day is a duplicate.
+const DUPLICATE_TODAY_TEXT = "Your attendance has already been recorded for today.";
+
 function describeScanError(error) {
   const code = String(error.code || "").toLowerCase();
   const message = String(error.message || "").trim();
   const body = error.body && typeof error.body === "object" ? error.body : {};
 
+  // A campus with no coordinates configured is a staff problem, not a student problem.
+  if (code.includes("location_unconfigured") || code.includes("campus_location")) {
+    return {
+      text: "Attendance is temporarily unavailable because campus location settings have not been configured. Please contact your mentor or campus administrator.",
+    };
+  }
+  if (code.includes("student_inactive")) {
+    return { text: "Your student account is inactive. Please contact your mentor or campus administrator." };
+  }
   if (error.status === 409 || code.includes("duplicate")) {
-    return { text: "Already checked in for this session.", duplicate: true };
+    return { text: DUPLICATE_TODAY_TEXT, duplicate: true };
   }
   if (code.includes("expired") || /expired/i.test(message)) {
     return { text: "This QR code has expired. Ask your mentor to show the current code and scan again.", retry: true };
@@ -691,12 +717,28 @@ async function onQrDecoded(decodedText) {
       // Prefer the record the backend returned with the 409; otherwise look it up in the
       // student's own history. If neither exists we say so and never invent a record.
       let existing = (error.body && (error.body.attendance || error.body.record)) || null;
-      if (!existing) existing = await findTodaysRecord();
+      let refreshFailed = false;
+      if (!existing) {
+        try {
+          existing = await fetchTodaysRecord();
+        } catch (lookupError) {
+          if (lookupError.sessionExpired) return handleSessionExpired();
+          refreshFailed = true;
+        }
+      }
       if (existing) {
         showConfirmation(existing, { duplicate: true });
-        showScanNotice("Already checked in for this session.");
+        showScanNotice(DUPLICATE_TODAY_TEXT);
+      } else if (refreshFailed) {
+        showScanNotice(
+          "Your attendance for today was already recorded, but we could not refresh the record just now. Reopen the History tab to load it.",
+          { retry: false },
+        );
       } else {
-        showScanNotice("Already checked in for this session.", { retry: false });
+        showScanNotice(
+          "Your attendance for today was already recorded. It is not showing in your history yet; reopen the History tab to refresh.",
+          { retry: false },
+        );
       }
       return;
     }
@@ -757,6 +799,10 @@ function setConnectionNote() {
 function wireEvents() {
   $("loginFormEl").addEventListener("submit", handleLogin);
   $("logoutBtn").addEventListener("click", handleLogout);
+  window.addEventListener("pagehide", () => { stopScanner(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") stopScanner();
+  });
   $("dashboardScanBtn").addEventListener("click", () => showView("scanner"));
   $("startScanBtn").addEventListener("click", startScanner);
   $("stopScanBtn").addEventListener("click", stopScanner);

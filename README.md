@@ -145,7 +145,7 @@ backend decides that, not the portal.
 
 | Backend value | Shown as | Notes |
 |---|---|---|
-| `on_time` | On Time | green badge (Engineer B's value) |
+| `present` | Present | green badge (canonical) |
 | `late` | Late | amber badge |
 | `absent` | Absent | red badge |
 | `present` | Present | green badge, tolerated alias only |

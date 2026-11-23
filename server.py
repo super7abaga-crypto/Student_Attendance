@@ -228,8 +228,8 @@ def seed() -> None:
     today = datetime.strptime(wat_parts()["date"], "%Y-%m-%d")
     for offset, session_type, status, time_wat in (
         (1, "morning", "late", "09:14:22"),
-        (2, "morning", "on_time", "09:03:10"),
-        (3, "afternoon", "on_time", "13:02:47"),
+        (2, "morning", "present", "09:03:10"),
+        (3, "afternoon", "present", "13:02:47"),
     ):
         scan_date = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
         if scan_date[:7] != wat_parts()["month"]:
@@ -488,18 +488,19 @@ class Handler(BaseHTTPRequestHandler):
             })
         session_id = f"{parts['date']}-{session_type}"
         with LOCK:
+            # Daily policy: one record per student per campus-local date, whatever the session.
             existing = next((r for r in DB["attendance"]
-                             if r["student_id"] == student["id"] and r["session_type"] == session_type
+                             if r["student_id"] == student["id"]
                              and r["attendance_date"] == parts["date"]), None)
             if existing:
                 return self.send_json(409, {
-                    "detail": "Already checked in for this session.",
+                    "detail": "Attendance has already been recorded for today.",
                     "code": "duplicate_attendance",
                     "attendance": record_view(existing),
                 })
 
             # Exactly at the cutoff counts as late, per the current contract.
-            status = "late" if parts["minutes"] >= SESSIONS[session_type]["cutoff"] else "on_time"
+            status = "late" if parts["minutes"] >= SESSIONS[session_type]["cutoff"] else "present"
             row = {
                 "id": str(uuid.uuid4()),
                 "student_id": student["id"],

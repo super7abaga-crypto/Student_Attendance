@@ -161,9 +161,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const statusRaw = await page.getAttribute('#confirmStatus', 'data-status');
   check('attendance_action shown from backend', (await page.textContent('#confirmAction')).trim() === 'check_in', await page.textContent('#confirmAction'));
   // The badge must echo the backend's own value; the label is only a humanised copy.
-  const expectedLabel = { on_time: 'ON TIME', late: 'LATE', absent: 'ABSENT' }[statusRaw];
+  const expectedLabel = { present: 'PRESENT', late: 'LATE', absent: 'ABSENT', on_time: 'ON TIME' }[statusRaw];
   check('status comes from backend',
-    ['on_time', 'late', 'absent'].includes(statusRaw) && statusText === expectedLabel,
+    ['present', 'late', 'absent', 'on_time'].includes(statusRaw) && statusText === expectedLabel,
     'data-status=' + statusRaw + ' label=' + statusText);
   await page.screenshot({ path: path.join(SHOTS, '05-confirmation-success.png') });
   await page.click('#closeConfirmation');
@@ -173,7 +173,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.evaluate((payload) => window.onQrDecoded(payload), qr);
   await page.waitForSelector('#confirmationModal:not(.hidden)', { timeout: 8000 }).catch(() => {});
   await sleep(300);
-  check('duplicate message shown', /Already checked in for this session/i.test(await page.textContent('#scanNotice')), await page.textContent('#scanNotice'));
+  check('duplicate message shown', /already been recorded for today/i.test(await page.textContent('#scanNotice')), await page.textContent('#scanNotice'));
   check('duplicate card opens with original record', /Already checked in/.test(await page.textContent('#confirmationTitle')), await page.textContent('#confirmationTitle'));
   check('original name preserved', (await page.textContent('#confirmName')).trim() === 'Demo Student');
   check('original time preserved', /\d{2}:\d{2}/.test(await page.textContent('#confirmTime')));
@@ -225,6 +225,59 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await sleep(1500);
   check('wrong-campus message shown', /geofence|outside the campus|campus/i.test(await page.textContent('#scanNotice')), await page.textContent('#scanNotice'));
   await page.screenshot({ path: path.join(SHOTS, '08-wrong-campus.png') });
+
+  console.log('\n10b. Backend error mapping: location_unconfigured and student_inactive');
+  await context.setGeolocation({ latitude: 6.5244, longitude: 3.3792, accuracy: 15 });
+  const stubScan = async (status, body) => {
+    await page.route('**/api/v1/attendance/scan/', (route) =>
+      route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) }));
+  };
+  const clearRoutes = () => page.unroute('**/api/v1/attendance/scan/');
+
+  await stubScan(403, { success: false, code: 'location_unconfigured', message: 'Campus location is not configured.' });
+  const errQr = await page.evaluate(async () => (await (await fetch('/api/v1/dev/qr?session=morning')).json()).payload);
+  await page.evaluate((p) => window.onQrDecoded(p), errQr);
+  await sleep(1200);
+  const configNotice = await page.textContent('#scanNotice');
+  check('location_unconfigured explains campus configuration',
+    /campus location settings have not been configured/i.test(configNotice), configNotice);
+  check('location_unconfigured does not blame the student',
+    !/outside (your|the) campus|move closer/i.test(configNotice), configNotice);
+  await clearRoutes();
+
+  await stubScan(403, { success: false, code: 'student_inactive', message: 'Student account is inactive.' });
+  await page.evaluate((p) => window.onQrDecoded(p), errQr);
+  await sleep(1200);
+  const inactiveNotice = await page.textContent('#scanNotice');
+  check('student_inactive names the account problem', /account is inactive/i.test(inactiveNotice), inactiveNotice);
+  check('student_inactive is not shown as a session problem', !/no active attendance session/i.test(inactiveNotice), inactiveNotice);
+  await clearRoutes();
+
+  console.log('\n10c. Duplicate with an unreadable history stays honest');
+  await stubScan(409, { success: false, code: 'duplicate_attendance', message: 'Attendance has already been recorded for today.' });
+  await page.route('**/api/v1/student/attendance-history/', (route) =>
+    route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'Server error' }) }));
+  await page.evaluate((p) => window.onQrDecoded(p), errQr);
+  await sleep(1400);
+  const failedNotice = await page.textContent('#scanNotice');
+  check('duplicate wording is daily', /already (been )?recorded/i.test(failedNotice) && !/for this session/i.test(failedNotice), failedNotice);
+  check('duplicate refresh failure is stated honestly',
+    /could not refresh/i.test(failedNotice), failedNotice);
+  await page.unroute('**/api/v1/student/attendance-history/');
+  await clearRoutes();
+
+  console.log('\n10d. Camera is released when leaving the scanner');
+  await page.click('[data-view="scanner"]').catch(() => {});
+  await sleep(300);
+  await page.click('#startScanBtn').catch(() => {});
+  await sleep(1800);
+  const cameraOn = !(await page.isDisabled('#stopScanBtn'));
+  await page.click('[data-view="history"]').catch(() => {});
+  await sleep(1200);
+  check('camera started for the lifecycle check', cameraOn);
+  check('camera released after navigating away', await page.isDisabled('#stopScanBtn'));
+  await page.click('[data-view="scanner"]').catch(() => {});
+  await sleep(300);
 
   console.log('\n11. GPS denied');
   await context.setGeolocation({ latitude: 6.5244, longitude: 3.3792, accuracy: 15 });
@@ -341,7 +394,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('unknown status is neutral, never on-time', classes.unknown === 'neutral', classes.unknown);
   check('empty status is neutral', classes.empty === 'neutral', classes.empty);
 
-  check('history statuses are backend vocabulary', badge.every((s) => ['on_time', 'late', 'absent'].includes(s)), JSON.stringify(badge.slice(0, 4)));
+  check('history statuses are backend vocabulary', badge.every((s) => ['present', 'late', 'absent', 'on_time'].includes(s)), JSON.stringify(badge.slice(0, 4)));
 
   // Expected HTTP error responses (401/403/409) are logged by Chrome as resource errors;
   // only unexpected JavaScript/console errors matter here.

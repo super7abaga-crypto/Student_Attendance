@@ -132,7 +132,7 @@ Error codes the portal maps to student-readable messages:
 
 | HTTP | `code` | Meaning |
 |---|---|---|
-| 409 | `duplicate_attendance` | Already checked in for this session |
+| 409 | `duplicate_attendance` | Attendance already recorded for today (one record per campus-local day) |
 | 403 | `qr_expired` | QR past its 30-second life |
 | 400 | `invalid_qr` | Malformed or not an attendance code |
 | 403 | `wrong_campus` | Outside the campus geofence |

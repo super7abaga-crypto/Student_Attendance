@@ -81,7 +81,7 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
   await page.evaluate((p) => window.onQrDecoded(p), JSON.stringify(envelope));
   await page.waitForTimeout(2500);
   const notice = (await page.textContent('#scanNotice')).trim();
-  check('duplicate message shown', /already checked in/i.test(notice), notice);
+  check('duplicate message shown', /already been recorded for today/i.test(notice), notice);
   const dupCard = await page.isVisible('#confirmationModal');
   check('duplicate shows the original record from history', dupCard);
   if (dupCard) {
