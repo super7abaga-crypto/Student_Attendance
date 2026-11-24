@@ -2,7 +2,7 @@ import csv
 import json
 import io
 import qrcode
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.middleware.csrf import get_token
 from django.db import IntegrityError, transaction
@@ -10,23 +10,22 @@ from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from rest_framework import status, viewsets
-from rest_framework.authentication import TokenAuthentication
+from rest_framework import viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
 from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
-from rest_framework.generics import ListCreateAPIView
-from rest_framework.permissions import AllowAny, IsAuthenticated, SAFE_METHODS, BasePermission
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema
 from .models import (AttendanceAdjustment, AttendanceLog, AuditLog, Campus, CampusTransfer,
-                     Cohort, MonthlyReport, SessionRun, SessionSchedule, Student, Track, User, QRToken)
+                     Cohort, MentorCampusAccess, MonthlyReport, SessionRun, SessionSchedule,
+                     Student, Track, User, QRToken)
 from .permissions import StaffRolePermission
 from .serializers import (AttendanceSerializer, CampusSerializer, ScheduleSerializer,
                           StudentCreateSerializer, StudentSerializer, APIResponseSerializer)
-from .services import (DEFAULT_SCHEDULES, accessible_campuses, attended_sessions, audit, csv_safe, manual_adjustment,
+from .services import (DEFAULT_SCHEDULES, accessible_campuses, audit, csv_safe, manual_adjustment,
                        mint_qr, report_for, schedule_for, summary_for, user_can_access, user_can_export,
                        verify_qr, record_scan, QRValidationError, ScanLocationError, status_for_attendance_time)
 
@@ -379,7 +378,6 @@ class StudentViewSet(viewsets.ModelViewSet):
             allowed_ids=list(MentorCampusAccess.objects.filter(user=request.user,can_export=True).values_list("campus_id",flat=True))
             if not allowed_ids: raise PermissionDenied("CSV export is not permitted for your campus assignments.")
             request._export_campus_ids=allowed_ids
-        output=csv.writer(__import__("io").StringIO())
         import io
         buf=io.StringIO(); writer=csv.writer(buf); writer.writerow(["username","full_name","email","campus","track","cohort","student_code","active"])
         queryset=self.filter_queryset(self.get_queryset())

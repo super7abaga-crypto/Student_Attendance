@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
-from apps.core.models import AttendanceLog, Campus, Cohort, Student, Track
+from apps.core.models import AttendanceLog, Campus, Student, Track
 
 
 class Command(BaseCommand):
