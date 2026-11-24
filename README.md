@@ -130,30 +130,33 @@ The mentor kiosk emits JSON such as
 `{"version":1,"token":"signed-token","expires_at":1794908400}`. Tokens live 30 seconds; the
 backend decides that, not the portal.
 
-## 7. Daily attendance rules and duplicate prevention
+## 7. Checkpoint attendance rules and duplicate prevention
 
 - The backend decides every rule: session state, QR validity, geofence, duplicate protection,
-  On Time versus Late.
-- Duplicate protection in the current contract is **per student, per session, per day**. A
-  duplicate returns `409 duplicate_attendance`; the portal shows "Already checked in for this
-  session." and keeps the original record visible.
-- **Unresolved policy conflict:** an earlier project decision specified **one record per
-  student per calendar day**. That is *not* what the current contract or the mock does, and the
-  portal implements no restriction of its own. See [§15](#15-current-limitations-and-outstanding-work).
+  Present versus Late.
+- Duplicate protection is **per student, per campus-local day and per checkpoint**. A repeat
+  scan inside one checkpoint returns `409 duplicate_attendance` with the existing record; the
+  portal shows "You have already completed this checkpoint today." and keeps that record
+  visible. A later checkpoint on the same day is a new, legitimate record.
+- Three records can exist on one day: morning `check_in`, afternoon `check_in`, evening
+  `check_out`. The dashboard lists all three and the history table shows the action per row.
+- The portal implements no rule of its own and never computes a status. See
+  [§15](#15-current-limitations-and-outstanding-work) for the open backend gaps.
 
 ## 8. Attendance statuses
 
 | Backend value | Shown as | Notes |
 |---|---|---|
-| `present` | Present | green badge (canonical) |
+| `present` | Present | green badge, canonical |
 | `late` | Late | amber badge |
-| `absent` | Absent | red badge |
-| `present` | Present | green badge, tolerated alias only |
+| `absent` | Absent | red badge; never counted as attended |
+| `on_time` | On Time | legacy historical rows only, not a current status |
 | anything else | the raw value | shown verbatim, neutral grey badge |
 
-`statusClass()` colours only `late`, `absent` and the on-time family (`on_time`, plus the
-`present` alias). Anything unrecognised is neutral grey, so an unknown backend status is
-never mistaken for a good one.
+`statusClass()` colours only `late`, `absent` and the on-time family (`on_time` and `present`).
+Anything unrecognised is neutral grey, so an unknown backend status is never mistaken for a
+good one. The dashboard counts only `present`, `late` and legacy `on_time`; absences never
+appear in the attendance count or in "Last check-in".
 
 The raw value is always kept in `data-status` on the badge, and the portal never derives
 status from the device clock. If Engineer B renames a value, the badge follows with no code
@@ -266,7 +269,7 @@ pointing at Django; camera and GPS then need `localhost` or HTTPS.
 | `SESSION_OPEN_MINUTES` | `180` | how long a session accepts scans |
 | `DATA_FILE` | `dev/.data.json` | where the mock persists its data |
 | `MOCK_NOW_WAT` | unset | pins the mock clock, e.g. `09:10`, so cutoffs are testable |
-| `MOCK_ATTENDANCE_ACTION` | `checked_in` | mock-only value for `attendance_action` |
+| `MOCK_ATTENDANCE_ACTION` | `check_in` | mock-only override; each checkpoint otherwise uses its own action (`check_in`, `check_in`, `check_out`) |
 
 `app.js`: `CONFIG.API_BASE_URL`, `SESSION_STORAGE_KEY`, `SESSION_HOURS` (12), `GPS_OPTIONS`,
 `RECENT_ROWS`. No secrets live in the frontend, and none should ever be added.
@@ -311,21 +314,41 @@ npm install
 npm test
 ```
 
-`tests/api-test.py` runs 48 checks: login success and failure, Token scheme (Bearer rejected),
+`tests/api-test.py` runs 74 checks: login success and failure, Token scheme (Bearer rejected),
 bare-list history with contract fields, logout and idempotent logout, forged/expired token,
 valid scan with every documented field including `attendance_action`, duplicate 409 keeping the
 original record, expired QR, malformed QR, wrong campus, poor accuracy, missing GPS, inactive
-session, static assets under `/student/`, and a pinned-clock scenario for **09:05 present**,
-**09:10 exactly at cutoff late**, **09:11 late**.
+session, static assets under `/student/`, a pinned-clock scenario for **09:05 present**,
+**09:10 present**, **09:11 late**, and a three-checkpoint day (morning, afternoon and evening
+on one campus-local date, each with its own duplicate).
 
-`tests/ui-test.js` runs 68 checks in Chromium with a fake camera and mocked geolocation: login
+`tests/ui-test.js` runs 104 checks in Chromium with a fake camera and mocked geolocation: login
 screen and enrollment notice, invalid login, login, session restore after refresh, dashboard
 stats, history rendering and month filtering including the empty month, successful scan into
 the confirmation card, duplicate keeping the original record, expired QR, malformed QR, wrong
 campus, GPS denied, scan locking and retry, logout and 401 handling, three viewports with no
 horizontal overflow, assets under `/student/`, the dev kiosk rendering and refreshing, and
-backend status vocabulary. Screenshots land in `tests/screenshots/`; committed copies are in
+backend status vocabulary, attendance counts that exclude absences, checkpoint-scoped
+duplicate copy, and campus-local date handling for Lagos, Sao Paulo, New York and Tokyo.
+Screenshots land in `tests/screenshots/`; committed copies are in
 [`docs/screenshots/`](docs/screenshots).
+
+Two further suites cover real integration and layout:
+
+```bash
+# End-to-end against Engineer B's Django on a disposable database (PostgreSQL or SQLite).
+# The script refuses to run unless the database name contains e2e, test or sandbox.
+DJANGO_DIR=../backend DATABASE_URL=postgresql://.../e2e_portal \
+  node tests/e2e-django.js          # 27 checks
+
+# Responsive audit: desktop 1440, tablet 834, phone 390 against any running portal.
+PORTAL_URL=http://127.0.0.1:8020/index.html API_BASE=http://127.0.0.1:8010/api/v1 \
+  PORTAL_USER=... PORTAL_PASS=... node tests/responsive-test.js   # 38 checks
+```
+
+Results recorded for this revision: `api-test.py` 74 passed; `ui-test.js` 104 passed (run twice);
+`e2e-django.js` 27 passed against Django with a **non-Lagos** campus (`America/Sao_Paulo`);
+`responsive-test.js` 38 passed.
 
 **These are mock tests.** They prove the frontend honours the documented contract and handles
 each response shape; they do not prove behaviour against Engineer B's backend. See section 15
@@ -336,36 +359,39 @@ can be pointed at a deployed student portal once the backend is reachable.
 
 ## 15. Current limitations and outstanding work
 
+**Attendance model (settled).** The CEO approved the three-checkpoint model on 23 November
+2026: one record per student, campus-local day and checkpoint; morning and afternoon are
+`check_in`, evening is `check_out`; a repeat scan inside one checkpoint returns 409 with the
+existing record; one absence per checkpoint, created only after that checkpoint's own close;
+lateness starts at 09:11 and 13:11. The portal follows this model and does not enforce it.
+
 Blocked on Engineer B:
 
-- **No reachable backend.** `https://fellowship.learn2earn.ng/api/v1/` currently answers every
-  path with the marketing page (HTML, 2351 bytes) instead of JSON, so no live integration test
-  was possible. `/student/` is not served either.
-- **No student credentials** for the pilot.
-- **No mentor kiosk** issuing real 30-second QR codes.
+- **`campus_timezone` / `campus_local_date` are not exposed.** The student login payload
+  carries only `campus` (UUID) and `campus_name`. Until an IANA zone or a campus-local date is
+  added, the portal cannot say which checkpoints are still open or closed; it shows the
+  campus-local date returned by the most recent scan, and otherwise labels the panel as the
+  most recent recorded day. It never assumes `Africa/Lagos`.
+- **Timestamps are labelled WAT.** The backend field is `scan_time_wat`, computed with the
+  server's `TIME_ZONE`, so the history table keeps the `TIME (WAT)` heading. A zone-neutral
+  value (for example `scanned_at` plus `campus_timezone`) would let the portal render
+  campus-local times.
+- **No deployed API.** `https://fellowship.learn2earn.ng/api/v1/` still answers every path with
+  the marketing page, so the portal cannot be pointed at production yet.
+- **No CI on the pull requests.** Nothing runs these suites automatically.
 
-Consequently these required tests are **blocked**: live login, live history, live scan,
-duplicate, expired/invalid QR, wrong campus, inactive session, exact-cutoff and after-cutoff
-status, mobile camera over HTTPS on a real device.
+Not verified:
 
-Open policy questions (Project Manager / CEO):
-
-1. **Daily versus per-session records.** One-record-per-day was decided earlier; the current
-   contract protects duplicates per session. Both are documented; neither is enforced by the
-   frontend.
-2. **Evening cutoff 17:10 or 17:15.**
-3. **Cutoff boundary.** The contract says exactly-at-cutoff is Late; the earlier mock treated
-   it as on time. The mock now follows the contract.
+- **Real-device testing.** No phone was available to this environment and no HTTPS deployment
+  exists, so camera permission, GPS permission and a real QR scan were not exercised on
+  hardware. The 390x844 and 834x1112 runs are browser device emulation, not a physical device.
 
 Known frontend limitations:
 
 - Logout cannot revoke a Django token; the 12-hour server-side expiry is the real control.
 - Camera and geolocation require HTTPS (or `localhost`); a plain-HTTP LAN address will fail.
 - The kiosk test page uses the vendored `vendor/qrcode.min.js`, so it draws a code with no
-  internet access. (The previous version loaded its library from a CDN and silently rendered a
-  blank square on networks that block jsdelivr.)
-- `attendance_action` is displayed but its value list is still unpublished by Engineer B.
-- Live integration tests remain blocked; see above.
+  internet access.
 
 ## 16. Integration responsibilities
 

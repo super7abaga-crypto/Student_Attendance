@@ -75,7 +75,13 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
   if (cardOpen) {
     const status = (await page.textContent('#confirmStatus')).trim();
     const raw = await page.getAttribute('#confirmStatus', 'data-status');
-    check('status is the backend value', raw === 'late' && status === 'LATE', 'data-status=' + raw + ' label=' + status);
+    // The backend decides present versus late; this run may sit inside the on-time
+    // window or after the lateness boundary, so assert the portal mirrors whatever
+    // the backend said rather than assuming a late scan.
+    const labelFor = { present: 'PRESENT', late: 'LATE', absent: 'ABSENT', on_time: 'ON TIME' };
+    check('status is the backend value',
+      ['present', 'late'].includes(raw) && status === labelFor[raw],
+      'data-status=' + raw + ' label=' + status);
     check('attendance_action from backend', (await page.textContent('#confirmAction')).trim() === 'check_in', await page.textContent('#confirmAction'));
     check('session label readable', (await page.textContent('#confirmSession')).trim() === 'Morning Session', await page.textContent('#confirmSession'));
     const cardDate = (await page.textContent('#confirmDate')).trim();
@@ -108,7 +114,7 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
   const rowText = (await page.textContent('#historyRows')).replace(/\s+/g, ' ');
   check('history row rendered', rows >= 1, 'rows=' + rows);
   check('history shows morning session', /Morning Session/.test(rowText), rowText.slice(0, 120));
-  check('history shows late badge', /LATE|Late/.test(rowText), rowText.slice(0, 120));
+  check('history shows the backend status badge', /PRESENT|Present|LATE|Late/.test(rowText), rowText.slice(0, 120));
   await page.screenshot({ path: path.join(SHOTS, 'e2e-history.png') });
 
   console.log('\n5b. Three checkpoints on one campus-local day (real backend data)');
