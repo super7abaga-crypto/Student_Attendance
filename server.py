@@ -230,6 +230,8 @@ def seed() -> None:
         (1, "morning", "late", "09:14:22"),
         (2, "morning", "present", "09:03:10"),
         (3, "afternoon", "present", "13:02:47"),
+        # A system-generated absence must never inflate the dashboard attendance count.
+        (4, "evening", "absent", "20:00:00"),
     ):
         scan_date = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
         if scan_date[:7] != wat_parts()["month"]:

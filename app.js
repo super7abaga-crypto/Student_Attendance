@@ -57,6 +57,10 @@ const state = {
   currentView: "dashboard",
   scanLocked: false,
   historyLoaded: false,
+  // Campus-local date and IANA zone, both supplied by the backend. Never computed
+  // from a fixed offset or the browser's clock zone.
+  campusDate: "",
+  campusTimezone: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -95,20 +99,13 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function watMonthKey(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: CONFIG.WAT_TIMEZONE, year: "numeric", month: "2-digit",
-  }).formatToParts(date).reduce((acc, p) => (acc[p.type] = p.value, acc), {});
-  return `${parts.year}-${parts.month}`;
-}
-
 function monthKeyOf(record) {
   const raw = String(record.attendance_date || record.scan_date || record.date || "");
   const match = /^(\d{4})-(\d{2})/.exec(raw);
   if (match) return `${match[1]}-${match[2]}`;
   const stamp = record.scanned_at || record.scan_time_wat || "";
   const parsed = Date.parse(stamp);
-  if (!Number.isNaN(parsed)) return watMonthKey(new Date(parsed));
+  if (!Number.isNaN(parsed)) return campusDateFor(state.campusTimezone, new Date(parsed))?.slice(0, 7) || "";
   return "";
 }
 
@@ -223,6 +220,7 @@ function restoreSession() {
   }
   state.token = saved.token;
   state.student = normaliseStudent(saved.student);
+  rememberCampusTimezone(saved.student);
   return true;
 }
 
@@ -331,6 +329,7 @@ async function handleLogin(event) {
     if (!token) throw new ApiError("The server did not return a login token. Contact your mentor.", { status: 0 });
     state.token = token;
     state.student = normaliseStudent(body.student || body.user || body.profile || body);
+    rememberCampusTimezone(body.student || body.user || body.profile || body);
     saveSession();
     $("loginPassword").value = "";
     showApp();
@@ -404,10 +403,55 @@ function recordRow(record) {
   </tr>`;
 }
 
-// Today in West Africa Time, as YYYY-MM-DD, to match `attendance_date`.
-function todayWatKey() {
-  const now = new Date(Date.now() + 60 * 60 * 1000);
-  return now.toISOString().slice(0, 10);
+// Campus-local dates come from the backend, never from a fixed offset.
+// Sources, in order: the `attendance_date` of a scan response (201 or 409), or
+// `campus_timezone` when the student payload exposes it. When neither is available the
+// portal must not invent a date; callers fall back to the newest recorded day.
+function campusDateFor(timeZone, instant = new Date()) {
+  if (!timeZone) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(instant).reduce((acc, p) => (acc[p.type] = p.value, acc), {});
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+// The student payload may expose the campus zone as `campus_timezone`, or a nested
+// `campus.timezone` object. Absent today, so this stays dormant until Partner B adds it.
+function rememberCampusTimezone(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const nested = source.campus && typeof source.campus === "object" ? source.campus : {};
+  const zone = String(source.campus_timezone || source.timezone || nested.timezone || "").trim();
+  if (!zone) return;
+  state.campusTimezone = zone;
+}
+
+function rememberCampusDate(attendance) {
+  const day = dateKeyOf(attendance);
+  if (!day) return;
+  const changed = state.campusDate !== day;
+  state.campusDate = day;
+  if (changed && state.records && state.records.length) { renderDashboard(); renderHistory(); }
+}
+
+function dateKeyOf(record) {
+  return String((record && (record.attendance_date || record.scan_date || record.date)) || "").slice(0, 10);
+}
+
+function campusTodayKey() {
+  if (state.campusDate) return state.campusDate;
+  return campusDateFor(state.campusTimezone);
+}
+
+function campusMonthKey() {
+  const today = campusTodayKey();
+  if (today) return today.slice(0, 7);
+  const latest = sortRecords(state.records)[0];
+  const key = latest ? dateKeyOf(latest) : "";
+  return key ? key.slice(0, 7) : "";
 }
 
 // The existing record for today, read from history. Returns null when the history has
@@ -425,9 +469,11 @@ async function fetchTodaysRecord(sessionType) {
   state.historyLoaded = true;
   renderDashboard();
   renderHistory();
-  const today = todayWatKey();
+  const today = campusTodayKey();
+  const newest = sortRecords(list)[0];
+  const fallbackDay = today || (newest ? dateKeyOf(newest) : "");
   const todays = sortRecords(list).filter(
-    (record) => String(record.attendance_date || "").slice(0, 10) === today
+    (record) => dateKeyOf(record) === fallbackDay
   );
   if (!todays.length) return null;
   const wanted = String(sessionType || "").trim().toLowerCase();
@@ -447,17 +493,19 @@ function sortRecords(records) {
 }
 
 function renderDashboard() {
-  const month = watMonthKey();
-  const records = sortRecords(state.records.filter((r) => monthKeyOf(r) === month));
-  const onTime = records.filter((r) => statusClass(r.status) === "on-time").length;
-  const late = records.filter((r) => statusClass(r.status) === "late").length;
+  const month = campusMonthKey();
+  const records = sortRecords(state.records.filter((r) => !month || monthKeyOf(r) === month));
+  // Only real attendance counts as attended: system or manual absences never do.
+  const attended = records.filter((r) => ["on-time", "late"].includes(statusClass(r.status)));
+  const onTime = attended.filter((r) => statusClass(r.status) === "on-time").length;
+  const late = attended.filter((r) => statusClass(r.status) === "late").length;
 
-  $("statAttended").textContent = String(records.length);
+  $("statAttended").textContent = String(attended.length);
   $("statOnTime").textContent = String(onTime);
   $("statLate").textContent = String(late);
 
-  if (records.length) {
-    const latest = records[0];
+  if (attended.length) {
+    const latest = attended[0];
     $("statLast").textContent = timeLabel(latest);
     $("statLastMeta").textContent = `${sessionLabel(latest.session_type || latest.session_name)} · ${dateLabel(latest)}`;
   } else {
@@ -476,7 +524,7 @@ function renderDashboard() {
 }
 
 function renderHistory() {
-  const month = state.historyMonth || watMonthKey();
+  const month = state.historyMonth || campusMonthKey();
   const records = sortRecords(state.records.filter((r) => monthKeyOf(r) === month));
   const tbody = $("historyRows");
   const count = $("historyCount");
@@ -716,6 +764,7 @@ async function onQrDecoded(decodedText) {
     });
 
     const attendance = result && (result.attendance || result.record) ? (result.attendance || result.record) : result;
+    rememberCampusDate(attendance);
     setScanState(false);
     showConfirmation(attendance || {}, { duplicate: false });
     await loadAttendance();
@@ -728,6 +777,7 @@ async function onQrDecoded(decodedText) {
       // Prefer the record the backend returned with the 409; otherwise look it up in the
       // student's own history. If neither exists we say so and never invent a record.
       let existing = (error.body && (error.body.attendance || error.body.record)) || null;
+      rememberCampusDate(existing);
       let refreshFailed = false;
       if (!existing) {
         try {
@@ -744,12 +794,12 @@ async function onQrDecoded(decodedText) {
         showScanNotice(DUPLICATE_CHECKPOINT_TEXT);
       } else if (refreshFailed) {
         showScanNotice(
-          "Your attendance for today was already recorded, but we could not refresh the record just now. Reopen the History tab to load it.",
+          "You have already completed this checkpoint, but we could not refresh the record just now. Reopen the History tab to load it.",
           { retry: false },
         );
       } else {
         showScanNotice(
-          "Your attendance for today was already recorded. It is not showing in your history yet; reopen the History tab to refresh.",
+          "You have already completed this checkpoint. It is not showing in your history yet; reopen the History tab to refresh.",
           { retry: false },
         );
       }
@@ -775,16 +825,33 @@ function actionLabel(action) {
 }
 
 function todaysRecords() {
-  const today = todayWatKey();
-  return sortRecords(state.records.filter(
-    (record) => String(record.attendance_date || "").slice(0, 10) === today
-  ));
+  const key = campusTodayKey();
+  if (key) return sortRecords(state.records.filter((record) => dateKeyOf(record) === key));
+  const latest = sortRecords(state.records)[0];
+  const newest = latest ? dateKeyOf(latest) : "";
+  if (!newest) return [];
+  return sortRecords(state.records.filter((record) => dateKeyOf(record) === newest));
+}
+
+// True when the panel is showing the newest recorded day because the backend has not
+// yet told the portal the campus-local date.
+function showingNewestRecordedDay() {
+  return !campusTodayKey() && sortRecords(state.records).length > 0;
 }
 
 // One row per checkpoint, built only from records the backend returned.
 function renderCheckpoints() {
   const body = $("checkpointRows");
   if (!body) return;
+  const hint = $("checkpointHint");
+  if (hint) {
+    const day = campusTodayKey();
+    hint.textContent = day
+      ? `Campus-local date ${day}. Morning, afternoon and evening are recorded separately.`
+      : showingNewestRecordedDay()
+        ? "Showing your most recent recorded day. Your campus date is confirmed when you scan."
+        : "Morning, afternoon and evening are recorded separately.";
+  }
   const today = todaysRecords();
   const bySession = {};
   today.forEach((record) => {
@@ -885,14 +952,14 @@ function wireEvents() {
     button.addEventListener("click", () => showView(button.dataset.go));
   });
   $("monthFilter").addEventListener("change", () => {
-    state.historyMonth = $("monthFilter").value || watMonthKey();
+    state.historyMonth = $("monthFilter").value || campusMonthKey();
     renderHistory();
   });
 }
 
 function init() {
   $("year").textContent = String(new Date().getFullYear());
-  state.dashboardMonth = watMonthKey();
+  state.dashboardMonth = campusMonthKey();
   state.historyMonth = state.dashboardMonth;
   $("monthFilter").value = state.dashboardMonth;
   setConnectionNote();

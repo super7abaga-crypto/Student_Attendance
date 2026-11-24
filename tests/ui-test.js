@@ -114,6 +114,20 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.waitForFunction(() => document.getElementById('statAttended').textContent !== '—', null, { timeout: 5000 }).catch(() => {});
   const attended = await page.textContent('#statAttended');
   check('dashboard records loaded', Number(attended) >= 1, 'attended=' + attended);
+  const counts = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#historyRows tr')];
+    const statuses = rows
+      .map((tr) => tr.querySelector('.status-pill'))
+      .filter(Boolean)
+      .map((el) => String(el.getAttribute('data-status') || '').toLowerCase());
+    return { total: statuses.length, absent: statuses.filter((s) => s === 'absent').length };
+  });
+  check('seeded history contains an absence to test against', counts.absent >= 1, JSON.stringify(counts));
+  check('attendance count excludes absences',
+    Number(attended) === counts.total - counts.absent,
+    `attended=${attended} total=${counts.total} absent=${counts.absent}`);
+  const lastStatus = await page.getAttribute('#recentRows tr:first-child .status-pill', 'data-status').catch(() => null);
+  check('last check-in is never an absence', String(lastStatus || '').toLowerCase() !== 'absent', 'last=' + lastStatus);
   check('no attendance percentage card', (await page.locator('text=/Attendance rate/i').count()) === 0);
   check('last check-in card populated', (await page.textContent('#statLast')).match(/\d{2}:\d{2}/) !== null, await page.textContent('#statLast'));
   await page.screenshot({ path: path.join(SHOTS, '02-dashboard-desktop.png') });
@@ -278,7 +292,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.evaluate((p) => window.onQrDecoded(p), errQr);
   await sleep(1400);
   const failedNotice = await page.textContent('#scanNotice');
-  check('duplicate wording is daily', /already (been )?recorded/i.test(failedNotice) && !/for this session/i.test(failedNotice), failedNotice);
+  check('duplicate fallback names the checkpoint', /already completed this checkpoint/i.test(failedNotice) && !/for today|for this session/i.test(failedNotice), failedNotice);
   check('duplicate refresh failure is stated honestly',
     /could not refresh/i.test(failedNotice), failedNotice);
   await page.unroute('**/api/v1/student/attendance-history/');
@@ -296,6 +310,26 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('camera released after navigating away', await page.isDisabled('#stopScanBtn'));
   await page.click('[data-view="scanner"]').catch(() => {});
   await sleep(300);
+
+  console.log('\n10e. Campus-local dates do not assume Africa/Lagos');
+  const tzChecks = await page.evaluate(() => {
+    const instant = new Date('2026-11-24T02:30:00Z');
+    return {
+      lagos: window.campusDateFor('Africa/Lagos', instant),
+      saoPaulo: window.campusDateFor('America/Sao_Paulo', instant),
+      newYork: window.campusDateFor('America/New_York', instant),
+      tokyo: window.campusDateFor('Asia/Tokyo', instant),
+      unknown: window.campusDateFor('', instant),
+      invalid: window.campusDateFor('Not/AZone', instant),
+    };
+  });
+  check('Lagos campus date is 2026-11-24', tzChecks.lagos === '2026-11-24', JSON.stringify(tzChecks));
+  check('Sao Paulo campus date is 2026-11-23', tzChecks.saoPaulo === '2026-11-23', JSON.stringify(tzChecks));
+  check('New York campus date is 2026-11-23', tzChecks.newYork === '2026-11-23', JSON.stringify(tzChecks));
+  check('Tokyo campus date is 2026-11-24', tzChecks.tokyo === '2026-11-24', JSON.stringify(tzChecks));
+  check('no timezone yields no invented date', tzChecks.unknown === null && tzChecks.invalid === null, JSON.stringify(tzChecks));
+  const panelHint = await page.textContent('#checkpointHint');
+  check('checkpoint panel labels the day it is showing', /campus-local date|most recent recorded day/i.test(panelHint), panelHint);
 
   console.log('\n11. GPS denied');
   await context.setGeolocation({ latitude: 6.5244, longitude: 3.3792, accuracy: 15 });

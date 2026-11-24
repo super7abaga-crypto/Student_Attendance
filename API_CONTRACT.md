@@ -109,10 +109,11 @@ regardless of the response.
 `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `attendance_action`.
 
 `status` is rendered from the backend value only; the portal never computes it and never
-compares the device clock with a cutoff. Engineer B's values are `on_time`, `late` and
-`absent`; they are humanised for the badge ("On Time", "Late", "Absent") and any other
-string, including the tolerated `present` alias, is shown verbatim. The raw value is always kept in `data-status`, so a
-change of vocabulary on the backend never breaks the portal.
+compares the device clock with a cutoff. The canonical values are `present`, `late` and
+`absent`, humanised as "Present", "Late" and "Absent". `on_time` is legacy data written
+before the daily policy and is still displayed as "On Time" for historical rows only; it is
+not a current status. Any other string is shown verbatim, and the raw value is always kept in
+`data-status`, so a change of vocabulary on the backend never breaks the portal.
 
 `attendance_action` is shown verbatim in the confirmation card's "BACKEND ACTION" row and
 kept in `data-action`. The portal does not branch on its value: the duplicate path is driven
@@ -121,12 +122,12 @@ by HTTP 409 and `code: duplicate_attendance`, not by this field.
 `attendance_action` values are `check_in` and `check_out` per Engineer B's published contract
 (`docs/ENGINEER_A_API.md`); the mock mirrors them (override with `MOCK_ATTENDANCE_ACTION`).
 
-**Duplicate responses may omit the record.** Engineer B's 409 returns only
-`{success, code: "duplicate_attendance", message}`. The portal therefore re-reads
-`/student/attendance-history/` and displays today's existing record, marked as already checked
-in. When history has no record for that checkpoint the notice is shown without a card: the portal never
-invents attendance data. If Partner B later includes the record in the 409 body, the portal
-uses it directly and skips the lookup.
+**Duplicate responses carry the existing record.** Engineer B's 409 returns
+`{success: false, code: "duplicate_attendance", message, attendance: {...}}`. The portal uses
+that `attendance` object directly, so it never depends on a cached list. Only if a response
+omits it does the portal re-read `/student/attendance-history/` and match the record for that
+checkpoint and campus-local date. When no record can be found the notice is shown without a
+card: the portal never invents attendance data.
 
 Error codes the portal maps to student-readable messages:
 
@@ -185,16 +186,18 @@ reliable denominator.
 | Afternoon | 13:10 |
 | Evening | 17:10 |
 
-A scan exactly at the cutoff is **Late**. Duplicate protection is per student, per session,
-per day. The portal does not enforce or recompute any of this.
+A scan exactly at the cutoff is **Late** for the check-in checkpoints; evening is a
+`check_out` and is never late. Duplicate protection is per student, per campus-local day and
+per checkpoint, so one student may hold a morning, an afternoon and an evening record on the
+same day while a repeat scan inside one checkpoint is rejected. The portal does not enforce or
+recompute any of this.
 
 ## Open policy conflicts — for the Project Manager and CEO
 
-1. **Daily versus per-session records.** An earlier project decision specified one
-   attendance record per student per calendar day. The current contract protects duplicates
-   per session, so a student can hold three records in one day. The portal implements
-   neither rule itself; it displays whatever the backend records. A decision is required
-   before either side changes behaviour.
+1. **Daily versus per-checkpoint records — resolved.** The CEO approved the three-checkpoint
+   model on 23 November 2026: one record per student, campus-local day and checkpoint, with
+   morning and afternoon `check_in`, evening `check_out`, and a 409 for a repeat inside one
+   checkpoint. The portal follows that model.
 2. **Evening cutoff 17:10 versus 17:15.** The contract supplied for this task says 17:10;
    an earlier instruction from the student-portal side said 17:15. The portal displays the
    backend's answer, so this only affects Engineer B's calculation and the README table.
