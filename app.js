@@ -119,16 +119,50 @@ function dateLabel(record) {
   }).format(date);
 }
 
+// Campus-local clock time. The backend sends scan_time_local in the campus's own
+// zone; the legacy scan_time_wat field carries the same value. Only when neither is
+// present do we fall back to the canonical UTC instant, rendered in the campus zone
+// when the backend told us which zone that is.
 function timeLabel(record) {
-  // The backend sends scan_time_wat (already WAT). Use it verbatim when present.
-  const wat = String(record.scan_time_wat || "").trim();
-  if (wat) return wat.length > 5 ? wat.slice(0, 5) : wat;
+  const local = String(record.scan_time_local || record.scan_time_wat || "").trim();
+  if (local) return local.length > 5 ? local.slice(0, 5) : local;
   const stamp = record.scanned_at || record.timestamp || "";
   const parsed = Date.parse(stamp);
   if (Number.isNaN(parsed)) return "—";
+  const zone = record.campus_timezone || state.campusTimezone || CONFIG.WAT_TIMEZONE;
   return new Intl.DateTimeFormat("en-GB", {
-    timeZone: CONFIG.WAT_TIMEZONE, hour: "2-digit", minute: "2-digit", hour12: false,
+    timeZone: zone, hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(new Date(parsed));
+}
+
+// The canonical instant, exactly as the backend serialized it (UTC, unambiguous).
+function utcLabel(record) {
+  const stamp = String(record.scanned_at || "").trim();
+  if (!stamp) return "";
+  const parsed = Date.parse(stamp);
+  if (Number.isNaN(parsed)) return stamp;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC", day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).format(new Date(parsed)) + " UTC";
+}
+
+// Column heading follows the campus the records actually belong to.
+function campusTimeHeading() {
+  const zone = state.campusTimezone
+    || (state.records.find((r) => r && r.campus_timezone) || {}).campus_timezone
+    || "";
+  return zone ? `TIME (${String(zone).toUpperCase()})` : "TIME (CAMPUS LOCAL)";
+}
+
+function applyTimeHeadings() {
+  const label = campusTimeHeading();
+  ["historyTimeHeader", "recentTimeHeader"].forEach((id) => {
+    const el = $(id);
+    if (el) el.textContent = label;
+  });
+  const confirmLabel = $("confirmTimeLabel");
+  if (confirmLabel) confirmLabel.textContent = label;
 }
 
 function statusBadge(record) {
@@ -493,6 +527,7 @@ function sortRecords(records) {
 }
 
 function renderDashboard() {
+  applyTimeHeadings();
   const month = campusMonthKey();
   const records = sortRecords(state.records.filter((r) => !month || monthKeyOf(r) === month));
   // Only real attendance counts as attended: system or manual absences never do.
@@ -524,6 +559,7 @@ function renderDashboard() {
 }
 
 function renderHistory() {
+  applyTimeHeadings();
   const month = state.historyMonth || campusMonthKey();
   const records = sortRecords(state.records.filter((r) => monthKeyOf(r) === month));
   const tbody = $("historyRows");
@@ -884,6 +920,12 @@ function showConfirmation(attendance, { duplicate = false } = {}) {
   $("confirmSession").textContent = sessionLabel(attendance.session_type || attendance.session_name);
   $("confirmDate").textContent = attendance.attendance_date ? dateLabel(attendance) : "—";
   $("confirmTime").textContent = timeLabel(attendance);
+  const utcEl = $("confirmUtc");
+  if (utcEl) {
+    const canonical = utcLabel(attendance);
+    utcEl.textContent = canonical || "—";
+    utcEl.title = canonical ? "Canonical backend timestamp (scanned_at)" : "";
+  }
 
   // attendance_action is returned by the backend; we display it verbatim and never
   // branch on its value (Engineer B owns the enum).

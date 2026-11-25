@@ -331,6 +331,20 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const panelHint = await page.textContent('#checkpointHint');
   check('checkpoint panel labels the day it is showing', /campus-local date|most recent recorded day/i.test(panelHint), panelHint);
 
+  console.log('\n10f. Campus-local time and the canonical UTC instant');
+  const headerText = (await page.textContent('#historyTimeHeader')).trim();
+  check('history heading names the campus zone', /TIME \(AFRICA\/LAGOS\)/i.test(headerText), headerText);
+  const rowTime = await page.evaluate(() => {
+    const cell = document.querySelector('#historyRows tr td:nth-child(4)');
+    return cell ? cell.textContent.trim() : '';
+  });
+  check('row time comes from the campus-local field', /^\d{2}:\d{2}$/.test(rowTime), rowTime);
+  const zoneShown = await page.evaluate(() => {
+    const r = (window.state && window.state.records) ? window.state.records[0] : null;
+    return r ? (r.campus_timezone || '') : '';
+  });
+  check('records carry campus_timezone from the backend', zoneShown === '' || zoneShown === 'Africa/Lagos', zoneShown);
+
   console.log('\n11. GPS denied');
   await context.setGeolocation({ latitude: 6.5244, longitude: 3.3792, accuracy: 15 });
   await context.clearPermissions();

@@ -66,7 +66,7 @@
           </article>
           <article class="panel">
             <div class="panel-heading"><div><h3>Recent attendance</h3><p class="muted">Your latest recorded sessions</p></div><button class="text-btn" data-go="history">View all →</button></div>
-            <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>ACTION</th><th>DATE</th><th>TIME (WAT)</th><th>STATUS</th></tr></thead><tbody id="recentRows"><tr><td colspan="5" class="empty-cell">Loading your attendance…</td></tr></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>ACTION</th><th>DATE</th><th id="recentTimeHeader">TIME (CAMPUS LOCAL)</th><th>STATUS</th></tr></thead><tbody id="recentRows"><tr><td colspan="5" class="empty-cell">Loading your attendance…</td></tr></tbody></table></div>
           </article>
           <article class="panel profile-panel"><div class="panel-heading"><div><h3>My profile</h3><p class="muted">Your enrolled details</p></div><span class="profile-symbol">♙</span></div><div class="profile-detail"><small>FULL NAME</small><strong id="profileName">—</strong></div><div class="profile-detail"><small>ATTENDANCE USERNAME</small><strong id="profileUsername">—</strong></div><div class="profile-detail"><small>CAMPUS</small><strong id="profileCampus">—</strong></div><div class="profile-detail"><small>ACCOUNT STATUS</small><strong><span class="status-dot"></span> Active</strong></div><div class="profile-note">Your account is created and managed by your mentor. Your attendance username identifies your records, so keep your login details private.</div></article>
         </div>
@@ -90,7 +90,7 @@
         <div class="section-intro"><p class="eyebrow">YOUR RECORD</p><h2>Attendance history</h2><p class="muted">Review your attendance records by month.</p></div>
         <article class="panel">
           <div class="history-toolbar"><div><h3>Monthly records</h3><p class="muted">Times are displayed in West Africa Time (WAT).</p></div><input type="month" id="monthFilter" aria-label="Filter attendance by month"></div>
-          <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>ACTION</th><th>DATE</th><th>TIME (WAT)</th><th>STATUS</th></tr></thead><tbody id="historyRows"><tr><td colspan="5" class="empty-cell">Loading your attendance…</td></tr></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>ACTION</th><th>DATE</th><th id="historyTimeHeader">TIME (CAMPUS LOCAL)</th><th>STATUS</th></tr></thead><tbody id="historyRows"><tr><td colspan="5" class="empty-cell">Loading your attendance…</td></tr></tbody></table></div>
           <div class="table-foot" id="historyCount">—</div>
         </article>
       </section>
@@ -133,7 +133,8 @@
         <div><small>USERNAME</small><strong id="confirmUsername">—</strong></div>
         <div><small>SESSION</small><strong id="confirmSession">—</strong></div>
         <div><small>DATE</small><strong id="confirmDate">—</strong></div>
-        <div><small>TIME (WAT)</small><strong id="confirmTime">—</strong></div>
+        <div><small>RECORDED (CANONICAL)</small><strong id="confirmUtc">—</strong></div>
+        <div><small id="confirmTimeLabel">TIME (CAMPUS LOCAL)</small><strong id="confirmTime">—</strong></div>
         <div id="confirmActionRow" class="hidden"><small>BACKEND ACTION</small><strong id="confirmAction">—</strong></div>
       </div>
       <div class="confirmation-status" id="confirmStatus" data-status="">ON TIME</div>

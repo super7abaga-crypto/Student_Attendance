@@ -158,6 +158,14 @@ Anything unrecognised is neutral grey, so an unknown backend status is never mis
 good one. The dashboard counts only `present`, `late` and legacy `on_time`; absences never
 appear in the attendance count or in "Last check-in".
 
+Timestamps follow Partner B's contract: `scanned_at` is the canonical instant, serialized as
+explicit UTC (`2026-11-25T12:05:00Z`) and shown verbatim as RECORDED (CANONICAL);
+`scanned_at_local` carries the same instant with the campus offset
+(`2026-11-25T09:05:00-03:00`); `scan_time_local` is the campus wall clock used in the time
+column, with the legacy `scan_time_wat` carrying the same value. The column heading is built
+from `campus_timezone`, so a São Paulo campus reads `TIME (AMERICA/SAO_PAULO)` instead of
+`TIME (WAT)`.
+
 The raw value is always kept in `data-status` on the badge, and the portal never derives
 status from the device clock. If Engineer B renames a value, the badge follows with no code
 change.

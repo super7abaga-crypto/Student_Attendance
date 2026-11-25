@@ -2,6 +2,7 @@ const { chromium } = require('playwright-core');
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { assertDisposableDatabase } = require('./e2e-guard');
 
 // Runs the portal against Partner B's REAL Django backend (no mocks).
 // Prerequisites are documented in tests/README.md.
@@ -27,10 +28,10 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
   // Issue #5: never touch rows this run did not create. Refuse a database whose
   // name does not look disposable, then seed and clean only E2E fixtures.
   const dbName = sh("from django.conf import settings; print('DBNAME:' + str(settings.DATABASES['default'].get('NAME','')))").trim().split('\n').pop().replace('DBNAME:', '').trim();
-  if (!/(^|[\/_-])(e2e|test|sandbox)/i.test(dbName) && process.env.E2E_ALLOW_NON_ISOLATED_DB !== '1') {
-    console.error('Refusing to run: database "' + dbName + '" does not look disposable.\n'
-      + 'Point DATABASE_URL (or the sqlite NAME) at a database whose name contains e2e, test or sandbox,\n'
-      + 'or set E2E_ALLOW_NON_ISOLATED_DB=1 after confirming no real attendance lives there.');
+  try {
+    assertDisposableDatabase(dbName, { allowNonIsolated: process.env.E2E_ALLOW_NON_ISOLATED_DB === '1' });
+  } catch (guardError) {
+    console.error(guardError.message);
     process.exit(2);
   }
   const seed = JSON.parse(sh("from apps.core.models import Campus, Student, MentorCampusAccess, AttendanceLog; from django.contrib.auth import get_user_model; from django.utils import timezone; from zoneinfo import ZoneInfo; import json; U=get_user_model(); tzs=['America/Sao_Paulo','America/New_York','Africa/Lagos','Asia/Kolkata','Asia/Tokyo']; now=timezone.now(); tz=next((z for z in tzs if 9 <= timezone.localtime(now, ZoneInfo(z)).hour < 11), 'Africa/Lagos'); c,_=Campus.objects.get_or_create(name='E2E Campus', defaults={'latitude':4.8156,'longitude':7.0498,'geofence_radius_m':300,'timezone':tz,'active':True}); c.timezone=tz; c.latitude=4.8156; c.longitude=7.0498; c.geofence_radius_m=300; c.active=True; c.save(); m,_=U.objects.get_or_create(username='e2e.mentor', defaults={'role':U.Role.CAMPUS_ADMIN,'is_staff':True}); m.set_password('e2e-mentor-password-123'); m.save(); MentorCampusAccess.objects.get_or_create(user=m, campus=c); u,_=U.objects.get_or_create(username='e2e.student', defaults={'role':U.Role.STUDENT,'first_name':'E2E','last_name':'Student','assigned_campus':c}); u.set_password('e2e-student-password-123'); u.assigned_campus=c; u.save(); st,_=Student.objects.get_or_create(user=u, defaults={'campus':c}); print(json.dumps({'campus':c.name,'username':'e2e.student','password':'e2e-student-password-123','timezone':tz,'deleted':AttendanceLog.objects.filter(student=st).delete()[0]}))").trim().split('\n').pop());
@@ -38,6 +39,7 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
 
   const browser = await chromium.launch({ executablePath: CHROME,
     args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
+  try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 },
     permissions: ['geolocation'], geolocation: { latitude: 4.8156, longitude: 7.0498, accuracy: 15 } });
   await context.addInitScript((api) => { window.LEARN2EARN_API_BASE = api; }, API);
@@ -143,7 +145,15 @@ const sh = (code) => execSync(`python3 manage.py shell -c "${code.replace(/"/g, 
   const unexpected = consoleErrors.filter(e => !/Failed to load resource/i.test(e) && !/play\(\) request was interrupted/i.test(e));
   check('no unexpected console errors', unexpected.length === 0, unexpected.slice(0, 3).join(' | '));
 
-  await browser.close();
+  } catch (runError) {
+    // A failed run must still leave the database as it found it.
+    fail += 1;
+    console.error('   run error: ' + (runError && runError.message ? runError.message : runError));
+  } finally {
+    try { await browser.close(); } catch (_) { /* already closed */ }
+    const cleaned = sh("from apps.core.models import AttendanceLog, Student; st=Student.objects.filter(user__username='e2e.student').first(); print('CLEANED:' + str(AttendanceLog.objects.filter(student=st).delete()[0] if st else 0))").trim().split('\n').pop().replace('CLEANED:', '');
+    console.log('   cleanup: removed ' + cleaned + ' E2E attendance rows; other students untouched');
+  }
   console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

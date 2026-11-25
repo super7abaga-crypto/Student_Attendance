@@ -52,41 +52,75 @@ pilot credential and the mentor kiosk.
 ## Django end-to-end run (no mocks)
 
 `tests/e2e-django.js` drives the portal against **Partner B's real Django backend**. It is the
-only suite that proves the integration; the two suites above run against the local mock.
+only suite that proves the integration; the suites above run against the local mock.
 
-Prerequisites:
+### Database safety (issue #5)
 
-1. Partner B's backend checked out locally (branch `feat/engineer-b-attendance`) with a
-   **disposable** database whose name contains `e2e`, `test` or `sandbox`. The script seeds
-   its own fixtures (`E2E Campus`, `e2e.mentor`, `e2e.student`) and deletes only that
-   student's rows. It refuses to run against any other database unless
-   `E2E_ALLOW_NON_ISOLATED_DB=1` is set, because deleting real attendance would be
-   irreversible (issue #5).
-2. A campus timezone whose local time sits inside the morning window is picked
-   automatically from a small candidate list, so the run does not depend on the clock.
-2. Django running with a fixed signing secret and CORS for the portal origin:
+The run writes attendance rows, so it refuses to start unless the database is clearly
+disposable. `tests/e2e-guard.js` decides before any database access:
+
+| Resolved database name | Result |
+|---|---|
+| empty or unresolved | refused |
+| contains `prod`, `production`, `live`, `staging`, `shared`, `master`, `primary` | refused, **even with the override** |
+| contains `e2e`, `test` or `sandbox` as a whole segment | allowed |
+| anything else | refused unless `E2E_ALLOW_NON_ISOLATED_DB=1` |
+
+The script seeds its own fixtures (`E2E Campus`, `e2e.mentor`, `e2e.student`), removes only
+that student's attendance rows, and runs the same scoped cleanup in a `finally` block so a
+crashed or failed run still leaves every other student's history intact.
+
+Safety tests, no database needed:
+
+```bash
+cd tests
+node e2e-guard-test.js          # 15 checks; set DJANGO_DIR to also exercise the real script
+```
+
+### Exact commands
+
+1. Create a disposable database whose name says so:
 
    ```bash
-   DATABASE_URL=postgresql://postgres@127.0.0.1:55433/e2e_audit \
+   createdb -h 127.0.0.1 -p 5432 e2e_portal
+   DATABASE_URL=postgresql://postgres@127.0.0.1:5432/e2e_portal \
+     DJANGO_SETTINGS_MODULE=config.settings.dev python3 manage.py migrate --noinput
+   ```
+
+2. Run the backend with fixed secrets and CORS for the portal origin:
+
+   ```bash
+   DATABASE_URL=postgresql://postgres@127.0.0.1:5432/e2e_portal \
    DJANGO_SETTINGS_MODULE=config.settings.dev \
    ATTENDANCE_SECRET=local-audit-qr-secret-0123456789abcdef \
    CORS_ALLOWED_ORIGINS=http://127.0.0.1:8020 \
    python3 manage.py runserver 127.0.0.1:8010 --noreload
    ```
 
-3. The portal served from another origin:
+3. Serve the portal from another origin:
 
    ```bash
    python3 -m http.server 8020 --bind 127.0.0.1 --directory .
    ```
 
-4. Run:
+4. Run it:
 
    ```bash
    cd tests
-   DJANGO_DIR=/path/to/backend DATABASE_URL=postgresql://…/e2e_audit SHOTS=./screenshots node e2e-django.js
+   DJANGO_DIR=/path/to/backend \
+   DATABASE_URL=postgresql://postgres@127.0.0.1:5432/e2e_portal \
+   PORTAL_URL=http://127.0.0.1:8020/index.html \
+   node e2e-django.js            # 27 checks
    ```
 
-`DJANGO_DIR` is used only to mint a QR envelope with `manage.py shell`, because the mentor
-HTTP kiosk needs a session login and CSRF. The QR itself is minted by Partner B's
-`services.mint_qr`, so the portal still scans a genuine signed 30-second token.
+The campus timezone is chosen automatically from a small candidate list so the run does not
+depend on the wall clock, and the run reports the campus it used.
+
+### Responsive audit
+
+```bash
+PORTAL_URL=http://127.0.0.1:8020/index.html \
+API_BASE=http://127.0.0.1:8010/api/v1 \
+PORTAL_USER=e2e.student PORTAL_PASS=e2e-student-password-123 \
+node responsive-test.js          # 38 checks at 1440, 834 and 390 px
+```

@@ -71,6 +71,7 @@ CAMPUS = {
     "latitude": float(os.environ.get("CAMPUS_LAT", "6.5244")),
     "longitude": float(os.environ.get("CAMPUS_LON", "3.3792")),
     "radius_m": float(os.environ.get("CAMPUS_RADIUS_M", "300")),
+    "timezone": os.environ.get("CAMPUS_TZ", "Africa/Lagos"),
 }
 MAX_ACCURACY_M = float(os.environ.get("MAX_ACCURACY_M", "100"))
 
@@ -191,6 +192,8 @@ def public_student(student: dict) -> dict:
         "full_name": student["full_name"],
         "username": student["username"],
         "campus": student.get("campus", ""),
+        "campus_name": CAMPUS["name"],
+        "campus_timezone": CAMPUS["timezone"],
     }
 
 
@@ -201,7 +204,11 @@ def record_view(row: dict) -> dict:
         "username": row["username"],
         "session_type": row["session_type"],
         "attendance_date": row["attendance_date"],
+        # Canonical instant (UTC) plus the campus-local wall clock and its zone,
+        # matching Partner B's contract at 81d996a.
         "scanned_at": row["scanned_at"],
+        "scan_time_local": row["scan_time_wat"],
+        "campus_timezone": CAMPUS.get("timezone", "Africa/Lagos"),
         "scan_time_wat": row["scan_time_wat"],
         "status": row["status"],
         "attendance_action": row.get("attendance_action", MOCK_ATTENDANCE_ACTION),

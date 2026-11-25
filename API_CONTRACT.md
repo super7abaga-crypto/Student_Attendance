@@ -52,14 +52,19 @@ Django token authentication. The header is **`Authorization: Token <token>`**.
     "id": "3f1c…",
     "full_name": "Myles Odeh",
     "username": "myles_odeh",
-    "campus": "Lagos Campus"
+    "campus": "b3a1…-uuid",
+    "campus_name": "Lagos Campus",
+    "campus_timezone": "Africa/Lagos"
   }
 }
 ```
 
 The portal reads `token` (falling back to `access_token` / `key`) and the profile from
-`student` (falling back to `user` / `profile`). `campus` may be a string or an object with
-`name`/`code`; both are handled.
+`student` (falling back to `user` / `profile`). `campus` is Django's campus UUID and
+`campus_name` is the readable label, so the portal shows the name and never the UUID.
+`campus_timezone` is an IANA zone; when it is present the portal uses it to decide the
+campus-local date and to label the time column, and when it is absent the portal falls back
+to the campus-local date carried by attendance records rather than assuming a zone.
 
 `401` `{"detail": "Incorrect username or password."}` → shown as-is.
 
@@ -140,9 +145,11 @@ Error codes the portal maps to student-readable messages:
 | 403 | `session_inactive` | No open session for that QR |
 | 403 | `gps_accuracy` | Location too imprecise |
 
-Cutoffs, the status enum and duplicate protection are Engineer B's. Current documented
-defaults are morning 09:10, afternoon 13:10, evening 17:10, with a scan exactly at the
-cutoff counted as Late. The portal displays whatever status the backend returns.
+Cutoffs, the status enum and duplicate protection are Engineer B's. The settled defaults
+are morning 09:00–12:00, afternoon 13:00–16:00 and evening 17:00–20:00 campus-local, with
+lateness starting at 09:11:00 and 13:11:00 (the whole 09:10 and 13:10 minutes are on time)
+and the evening checkpoint never late. The portal displays whatever status the backend
+returns and never recomputes it.
 | 400 | `gps_required` | No coordinates supplied |
 | 401 | — | Token missing, expired or revoked |
 
@@ -173,24 +180,31 @@ The response is a **bare list**:
 ]
 ```
 
-The portal uses `scan_time_wat` verbatim for the time column and falls back to `scanned_at`
-formatted in `Africa/Lagos`. Month filtering happens in the frontend on `attendance_date`.
-No percentage or total-session figure is shown, because this endpoint does not supply a
-reliable denominator.
+The portal displays the campus-local clock time from `scan_time_local` (falling back to the
+legacy `scan_time_wat`, which now carries the same campus-local value). `scanned_at` is the
+canonical instant and is serialized as explicit UTC (`...Z`); the confirmation card shows it
+verbatim as RECORDED (CANONICAL). `scanned_at_local` carries the same instant with its
+campus offset. The time column heading follows `campus_timezone` when the backend supplies
+it, so a São Paulo campus is labelled with its own zone rather than WAT. Month filtering
+happens in the frontend on `attendance_date`. No percentage or total-session figure is
+shown, because this endpoint does not supply a reliable denominator.
 
 ## Attendance rules (backend-owned)
 
-| Session | Cutoff (WAT) |
-|---|---|
-| Morning | 09:10 |
-| Afternoon | 13:10 |
-| Evening | 17:10 |
+| Checkpoint | Opens | Present through | Late from | Closes | Action |
+|---|---|---|---|---|---|
+| Morning | 09:00 | 09:10:59 | 09:11:00 | 12:00 | `check_in` |
+| Afternoon | 13:00 | 13:10:59 | 13:11:00 | 16:00 | `check_in` |
+| Evening | 17:00 | — | never late | 20:00 | `check_out` |
 
-A scan exactly at the cutoff is **Late** for the check-in checkpoints; evening is a
-`check_out` and is never late. Duplicate protection is per student, per campus-local day and
-per checkpoint, so one student may hold a morning, an afternoon and an evening record on the
-same day while a repeat scan inside one checkpoint is rejected. The portal does not enforce or
-recompute any of this.
+Times are campus-local, from `campus.timezone`; the server's own zone is never used for a
+boundary. One record exists per student, per campus-local date and per checkpoint, so a
+student may hold a morning, an afternoon and an evening record on the same day, while a
+repeat scan inside one checkpoint returns `409 duplicate_attendance` with the existing record.
+After each checkpoint closes, the backend creates one `absent` row for each enrolled student
+who has no record for that checkpoint; a completed checkpoint never receives an absence, and
+a scheduler retry cannot create a second one. The portal does not enforce or recompute any of
+this.
 
 ## Open policy conflicts — for the Project Manager and CEO
 
@@ -198,12 +212,11 @@ recompute any of this.
    model on 23 November 2026: one record per student, campus-local day and checkpoint, with
    morning and afternoon `check_in`, evening `check_out`, and a 409 for a repeat inside one
    checkpoint. The portal follows that model.
-2. **Evening cutoff 17:10 versus 17:15.** The contract supplied for this task says 17:10;
-   an earlier instruction from the student-portal side said 17:15. The portal displays the
-   backend's answer, so this only affects Engineer B's calculation and the README table.
-3. **Cutoff boundary.** The current contract states a scan exactly at the cutoff is Late.
-   The earlier portal mock treated the cutoff minute as on time. The mock now follows the
-   contract (`>= cutoff` is Late); no frontend code depends on either rule.
+2. **Evening cutoff — settled.** Evening is a `check_out` that closes at 20:00 and is never
+   late, so the older 17:10-versus-17:15 question no longer applies.
+3. **Cutoff boundary — settled.** The CEO ruled that lateness starts at 09:11:00 and
+   13:11:00, so the whole 09:10 and 13:10 minutes are on time. The mock, the contract and
+   Partner B's backend now agree, and no frontend code depends on the old rule.
 
 ## CORS
 
