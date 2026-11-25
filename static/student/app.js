@@ -36,11 +36,13 @@ const SESSION_LABELS = {
 };
 
 // Known backend status values are humanised for the badge; anything else is shown raw.
+// Canonical daily statuses are present / late / absent. `on_time` is only kept so
+// historical rows written before the daily policy still read naturally.
 const STATUS_LABELS = {
-  on_time: "On Time",
   present: "Present",
   late: "Late",
   absent: "Absent",
+  on_time: "On Time",   // legacy value, historical rows only
 };
 
 const state = {
@@ -51,9 +53,14 @@ const state = {
   dashboardMonth: "",
   scanner: null,
   scannerRunning: false,
+  scannerStarting: false,
   currentView: "dashboard",
   scanLocked: false,
   historyLoaded: false,
+  // Campus-local date and IANA zone, both supplied by the backend. Never computed
+  // from a fixed offset or the browser's clock zone.
+  campusDate: "",
+  campusTimezone: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -92,20 +99,13 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function watMonthKey(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: CONFIG.WAT_TIMEZONE, year: "numeric", month: "2-digit",
-  }).formatToParts(date).reduce((acc, p) => (acc[p.type] = p.value, acc), {});
-  return `${parts.year}-${parts.month}`;
-}
-
 function monthKeyOf(record) {
   const raw = String(record.attendance_date || record.scan_date || record.date || "");
   const match = /^(\d{4})-(\d{2})/.exec(raw);
   if (match) return `${match[1]}-${match[2]}`;
   const stamp = record.scanned_at || record.scan_time_wat || "";
   const parsed = Date.parse(stamp);
-  if (!Number.isNaN(parsed)) return watMonthKey(new Date(parsed));
+  if (!Number.isNaN(parsed)) return campusDateFor(state.campusTimezone, new Date(parsed))?.slice(0, 7) || "";
   return "";
 }
 
@@ -119,16 +119,50 @@ function dateLabel(record) {
   }).format(date);
 }
 
+// Campus-local clock time. The backend sends scan_time_local in the campus's own
+// zone; the legacy scan_time_wat field carries the same value. Only when neither is
+// present do we fall back to the canonical UTC instant, rendered in the campus zone
+// when the backend told us which zone that is.
 function timeLabel(record) {
-  // The backend sends scan_time_wat (already WAT). Use it verbatim when present.
-  const wat = String(record.scan_time_wat || "").trim();
-  if (wat) return wat.length > 5 ? wat.slice(0, 5) : wat;
+  const local = String(record.scan_time_local || record.scan_time_wat || "").trim();
+  if (local) return local.length > 5 ? local.slice(0, 5) : local;
   const stamp = record.scanned_at || record.timestamp || "";
   const parsed = Date.parse(stamp);
   if (Number.isNaN(parsed)) return "—";
+  const zone = record.campus_timezone || state.campusTimezone || CONFIG.WAT_TIMEZONE;
   return new Intl.DateTimeFormat("en-GB", {
-    timeZone: CONFIG.WAT_TIMEZONE, hour: "2-digit", minute: "2-digit", hour12: false,
+    timeZone: zone, hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(new Date(parsed));
+}
+
+// The canonical instant, exactly as the backend serialized it (UTC, unambiguous).
+function utcLabel(record) {
+  const stamp = String(record.scanned_at || "").trim();
+  if (!stamp) return "";
+  const parsed = Date.parse(stamp);
+  if (Number.isNaN(parsed)) return stamp;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC", day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).format(new Date(parsed)) + " UTC";
+}
+
+// Column heading follows the campus the records actually belong to.
+function campusTimeHeading() {
+  const zone = state.campusTimezone
+    || (state.records.find((r) => r && r.campus_timezone) || {}).campus_timezone
+    || "";
+  return zone ? `TIME (${String(zone).toUpperCase()})` : "TIME (CAMPUS LOCAL)";
+}
+
+function applyTimeHeadings() {
+  const label = campusTimeHeading();
+  ["historyTimeHeader", "recentTimeHeader"].forEach((id) => {
+    const el = $(id);
+    if (el) el.textContent = label;
+  });
+  const confirmLabel = $("confirmTimeLabel");
+  if (confirmLabel) confirmLabel.textContent = label;
 }
 
 function statusBadge(record) {
@@ -146,12 +180,31 @@ function showToast(message) {
 }
 
 /* ------------------------------------------------------------------- auth -- */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value) {
+  return UUID_RE.test(String(value || "").trim());
+}
+
 function normaliseStudent(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
-  const campusValue = source.campus ?? source.campus_name ?? source.campus_name_display ?? null;
-  let campus = "";
-  if (typeof campusValue === "string") campus = campusValue;
-  else if (campusValue && typeof campusValue === "object") campus = campusValue.name || campusValue.code || campusValue.title || "";
+  const campusObject = source.campus && typeof source.campus === "object" ? source.campus : null;
+  // The backend sends the campus UUID in `campus` and the readable label in
+  // `campus_name`; the student should never see a UUID.
+  const campusLabel = String(
+    source.campus_name
+    || source.campus_name_display
+    || campusObject?.name
+    || campusObject?.title
+    || campusObject?.code
+    || (typeof source.campus === "string" && source.campus && !isUuid(source.campus) ? source.campus : "")
+    || ""
+  );
+  const campusId = String(
+    (campusObject && (campusObject.id || campusObject.uuid))
+    || (isUuid(source.campus) ? source.campus : "")
+    || ""
+  );
   const fullName = source.full_name
     || source.name
     || [source.first_name, source.last_name].filter(Boolean).join(" ")
@@ -161,7 +214,8 @@ function normaliseStudent(raw) {
     id: source.id ?? source.student_id ?? source.pk ?? null,
     full_name: String(fullName),
     username: String(source.username || source.user_name || ""),
-    campus: String(campus || ""),
+    campus: campusLabel,
+    campus_id: campusId,
   };
 }
 
@@ -200,6 +254,7 @@ function restoreSession() {
   }
   state.token = saved.token;
   state.student = normaliseStudent(saved.student);
+  rememberCampusTimezone(saved.student);
   return true;
 }
 
@@ -308,6 +363,7 @@ async function handleLogin(event) {
     if (!token) throw new ApiError("The server did not return a login token. Contact your mentor.", { status: 0 });
     state.token = token;
     state.student = normaliseStudent(body.student || body.user || body.profile || body);
+    rememberCampusTimezone(body.student || body.user || body.profile || body);
     saveSession();
     $("loginPassword").value = "";
     showApp();
@@ -353,6 +409,8 @@ function showAuth() {
 }
 
 function showView(name) {
+  // Never leave the camera running behind another screen.
+  if (name !== "scanner") stopScanner();
   if (!$(`${name}View`)) name = "dashboard";
   state.currentView = name;
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
@@ -366,16 +424,98 @@ function showView(name) {
 
 /* -------------------------------------------------------------- attendance -- */
 function setTableState(tbody, message, kind = "empty") {
-  tbody.innerHTML = `<tr><td colspan="4" class="empty-cell ${kind}">${escapeHtml(message)}</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="5" class="empty-cell ${kind}">${escapeHtml(message)}</td></tr>`;
 }
 
 function recordRow(record) {
   return `<tr>
     <td data-label="Session"><strong>${escapeHtml(sessionLabel(record.session_type || record.session_name))}</strong></td>
+    <td data-label="Action">${escapeHtml(actionLabel(record.attendance_action))}</td>
     <td data-label="Date">${escapeHtml(dateLabel(record))}</td>
     <td data-label="Time">${escapeHtml(timeLabel(record))}</td>
     <td data-label="Status">${statusBadge(record)}</td>
   </tr>`;
+}
+
+// Campus-local dates come from the backend, never from a fixed offset.
+// Sources, in order: the `attendance_date` of a scan response (201 or 409), or
+// `campus_timezone` when the student payload exposes it. When neither is available the
+// portal must not invent a date; callers fall back to the newest recorded day.
+function campusDateFor(timeZone, instant = new Date()) {
+  if (!timeZone) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(instant).reduce((acc, p) => (acc[p.type] = p.value, acc), {});
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+// The student payload may expose the campus zone as `campus_timezone`, or a nested
+// `campus.timezone` object. Absent today, so this stays dormant until Partner B adds it.
+function rememberCampusTimezone(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const nested = source.campus && typeof source.campus === "object" ? source.campus : {};
+  const zone = String(source.campus_timezone || source.timezone || nested.timezone || "").trim();
+  if (!zone) return;
+  state.campusTimezone = zone;
+}
+
+function rememberCampusDate(attendance) {
+  const day = dateKeyOf(attendance);
+  if (!day) return;
+  const changed = state.campusDate !== day;
+  state.campusDate = day;
+  if (changed && state.records && state.records.length) { renderDashboard(); renderHistory(); }
+}
+
+function dateKeyOf(record) {
+  return String((record && (record.attendance_date || record.scan_date || record.date)) || "").slice(0, 10);
+}
+
+function campusTodayKey() {
+  if (state.campusDate) return state.campusDate;
+  return campusDateFor(state.campusTimezone);
+}
+
+function campusMonthKey() {
+  const today = campusTodayKey();
+  if (today) return today.slice(0, 7);
+  const latest = sortRecords(state.records)[0];
+  const key = latest ? dateKeyOf(latest) : "";
+  return key ? key.slice(0, 7) : "";
+}
+
+// The existing record for today, read from history. Returns null when the history has
+// nothing for today (or cannot be loaded) so the caller can degrade gracefully.
+// Always read today's record from the server. A cached list can predate the scan that
+// just succeeded, and a duplicate must never be shown from stale data.
+async function fetchTodaysRecord(sessionType) {
+  const payload = await apiRequest("/student/attendance-history/");
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.records) ? payload.records
+    : Array.isArray(payload?.results) ? payload.results
+    : [];
+  state.records = list;
+  state.historyLoaded = true;
+  renderDashboard();
+  renderHistory();
+  const today = campusTodayKey();
+  const newest = sortRecords(list)[0];
+  const fallbackDay = today || (newest ? dateKeyOf(newest) : "");
+  const todays = sortRecords(list).filter(
+    (record) => dateKeyOf(record) === fallbackDay
+  );
+  if (!todays.length) return null;
+  const wanted = String(sessionType || "").trim().toLowerCase();
+  if (wanted) {
+    const match = todays.find((record) => String(record.session_type || "").trim().toLowerCase() === wanted);
+    if (match) return match;
+  }
+  return todays[0];
 }
 
 function sortRecords(records) {
@@ -387,23 +527,28 @@ function sortRecords(records) {
 }
 
 function renderDashboard() {
-  const month = watMonthKey();
-  const records = sortRecords(state.records.filter((r) => monthKeyOf(r) === month));
-  const onTime = records.filter((r) => statusClass(r.status) === "on-time").length;
-  const late = records.filter((r) => statusClass(r.status) === "late").length;
+  applyTimeHeadings();
+  const month = campusMonthKey();
+  const records = sortRecords(state.records.filter((r) => !month || monthKeyOf(r) === month));
+  // Only real attendance counts as attended: system or manual absences never do.
+  const attended = records.filter((r) => ["on-time", "late"].includes(statusClass(r.status)));
+  const onTime = attended.filter((r) => statusClass(r.status) === "on-time").length;
+  const late = attended.filter((r) => statusClass(r.status) === "late").length;
 
-  $("statAttended").textContent = String(records.length);
+  $("statAttended").textContent = String(attended.length);
   $("statOnTime").textContent = String(onTime);
   $("statLate").textContent = String(late);
 
-  if (records.length) {
-    const latest = records[0];
+  if (attended.length) {
+    const latest = attended[0];
     $("statLast").textContent = timeLabel(latest);
     $("statLastMeta").textContent = `${sessionLabel(latest.session_type || latest.session_name)} · ${dateLabel(latest)}`;
   } else {
     $("statLast").textContent = "—";
     $("statLastMeta").textContent = "No scan recorded yet";
   }
+
+  renderCheckpoints();
 
   const tbody = $("recentRows");
   if (!records.length) {
@@ -414,7 +559,8 @@ function renderDashboard() {
 }
 
 function renderHistory() {
-  const month = state.historyMonth || watMonthKey();
+  applyTimeHeadings();
+  const month = state.historyMonth || campusMonthKey();
   const records = sortRecords(state.records.filter((r) => monthKeyOf(r) === month));
   const tbody = $("historyRows");
   const count = $("historyCount");
@@ -433,9 +579,9 @@ function renderHistory() {
   count.textContent = `${records.length} record${records.length === 1 ? "" : "s"}`;
 }
 
-async function loadAttendance() {
+async function loadAttendance({ quiet = false } = {}) {
   if (!state.token) return;
-  if (!state.historyLoaded) {
+  if (!state.historyLoaded && !quiet) {
     setTableState($("historyRows"), "Loading your attendance…");
     setTableState($("recentRows"), "Loading your attendance…");
   }
@@ -494,7 +640,8 @@ async function startScanner() {
     showScanNotice("Your previous scan is still being verified. Please wait.");
     return;
   }
-  if (state.scannerRunning) return;
+  if (state.scannerRunning || state.scannerStarting) return;
+  state.scannerStarting = true;
   try {
     if (!state.scanner) state.scanner = new window.Html5Qrcode("reader");
     const cameras = await window.Html5Qrcode.getCameras();
@@ -515,6 +662,8 @@ async function startScanner() {
       error?.message || "Could not start the camera. Allow camera access and use HTTPS, then try again.",
       { retry: true },
     );
+  } finally {
+    state.scannerStarting = false;
   }
 }
 
@@ -570,13 +719,26 @@ function getFreshPosition() {
   });
 }
 
+// Attendance is per checkpoint: a repeat scan in the same checkpoint is a duplicate,
+// while a later checkpoint on the same campus-local day is a legitimate new record.
+const DUPLICATE_CHECKPOINT_TEXT = "You have already completed this checkpoint today.";
+
 function describeScanError(error) {
   const code = String(error.code || "").toLowerCase();
   const message = String(error.message || "").trim();
   const body = error.body && typeof error.body === "object" ? error.body : {};
 
+  // A campus with no coordinates configured is a staff problem, not a student problem.
+  if (code.includes("location_unconfigured") || code.includes("campus_location")) {
+    return {
+      text: "Attendance is temporarily unavailable because campus location settings have not been configured. Please contact your mentor or campus administrator.",
+    };
+  }
+  if (code.includes("student_inactive")) {
+    return { text: "Your student account is inactive. Please contact your mentor or campus administrator." };
+  }
   if (error.status === 409 || code.includes("duplicate")) {
-    return { text: "Already checked in for this session.", duplicate: true };
+    return { text: DUPLICATE_CHECKPOINT_TEXT, duplicate: true };
   }
   if (code.includes("expired") || /expired/i.test(message)) {
     return { text: "This QR code has expired. Ask your mentor to show the current code and scan again.", retry: true };
@@ -638,6 +800,7 @@ async function onQrDecoded(decodedText) {
     });
 
     const attendance = result && (result.attendance || result.record) ? (result.attendance || result.record) : result;
+    rememberCampusDate(attendance);
     setScanState(false);
     showConfirmation(attendance || {}, { duplicate: false });
     await loadAttendance();
@@ -647,13 +810,34 @@ async function onQrDecoded(decodedText) {
 
     const described = describeScanError(error);
     if (described.duplicate) {
-      const existing = (error.body && (error.body.attendance || error.body.record)) || null;
+      // Prefer the record the backend returned with the 409; otherwise look it up in the
+      // student's own history. If neither exists we say so and never invent a record.
+      let existing = (error.body && (error.body.attendance || error.body.record)) || null;
+      rememberCampusDate(existing);
+      let refreshFailed = false;
+      if (!existing) {
+        try {
+          existing = await fetchTodaysRecord(
+            (error.body && error.body.attendance && error.body.attendance.session_type) || ""
+          );
+        } catch (lookupError) {
+          if (lookupError.sessionExpired) return handleSessionExpired();
+          refreshFailed = true;
+        }
+      }
       if (existing) {
-        // Keep the original attendance visible instead of replacing it with an empty card.
         showConfirmation(existing, { duplicate: true });
-        showScanNotice("Already checked in for this session.");
+        showScanNotice(DUPLICATE_CHECKPOINT_TEXT);
+      } else if (refreshFailed) {
+        showScanNotice(
+          "You have already completed this checkpoint, but we could not refresh the record just now. Reopen the History tab to load it.",
+          { retry: false },
+        );
       } else {
-        showScanNotice("Already checked in for this session.");
+        showScanNotice(
+          "You have already completed this checkpoint. It is not showing in your history yet; reopen the History tab to refresh.",
+          { retry: false },
+        );
       }
       return;
     }
@@ -667,6 +851,68 @@ async function onQrDecoded(decodedText) {
 }
 
 /* ------------------------------------------------------------ confirmation -- */
+const CHECKPOINTS = ["morning", "afternoon", "evening"];
+const ACTION_LABELS = { check_in: "Check-in", check_out: "Check-out" };
+
+function actionLabel(action) {
+  const key = String(action || "").trim().toLowerCase();
+  if (!key) return "—";
+  return ACTION_LABELS[key] || key.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function todaysRecords() {
+  const key = campusTodayKey();
+  if (key) return sortRecords(state.records.filter((record) => dateKeyOf(record) === key));
+  const latest = sortRecords(state.records)[0];
+  const newest = latest ? dateKeyOf(latest) : "";
+  if (!newest) return [];
+  return sortRecords(state.records.filter((record) => dateKeyOf(record) === newest));
+}
+
+// True when the panel is showing the newest recorded day because the backend has not
+// yet told the portal the campus-local date.
+function showingNewestRecordedDay() {
+  return !campusTodayKey() && sortRecords(state.records).length > 0;
+}
+
+// One row per checkpoint, built only from records the backend returned.
+function renderCheckpoints() {
+  const body = $("checkpointRows");
+  if (!body) return;
+  const hint = $("checkpointHint");
+  if (hint) {
+    const day = campusTodayKey();
+    hint.textContent = day
+      ? `Campus-local date ${day}. Morning, afternoon and evening are recorded separately.`
+      : showingNewestRecordedDay()
+        ? "Showing your most recent recorded day. Your campus date is confirmed when you scan."
+        : "Morning, afternoon and evening are recorded separately.";
+  }
+  const today = todaysRecords();
+  const bySession = {};
+  today.forEach((record) => {
+    const key = String(record.session_type || "").trim().toLowerCase();
+    if (key && !bySession[key]) bySession[key] = record;
+  });
+  const known = CHECKPOINTS.concat(
+    Object.keys(bySession).filter((key) => !CHECKPOINTS.includes(key))
+  );
+  body.innerHTML = known.map((key) => {
+    const record = bySession[key];
+    const state = record
+      ? `<span class="status-pill ${statusClass(record.status)}" data-status="${escapeHtml(record.status)}">${escapeHtml(statusLabel(record.status).toUpperCase())}</span>`
+      : '<span class="status-pill neutral">NOT RECORDED YET</span>';
+    const meta = record
+      ? `${escapeHtml(actionLabel(record.attendance_action))} · ${escapeHtml(timeLabel(record))}`
+      : "Scan this checkpoint's QR when your mentor opens it";
+    return `<tr>
+      <td data-label="Checkpoint"><strong>${escapeHtml(sessionLabel(key))}</strong></td>
+      <td data-label="State">${state}</td>
+      <td data-label="Detail">${meta}</td>
+    </tr>`;
+  }).join("");
+}
+
 function showConfirmation(attendance, { duplicate = false } = {}) {
   const rawStatus = String(attendance.status || "").trim();
   $("confirmName").textContent = attendance.full_name || state.student?.full_name || "—";
@@ -674,6 +920,12 @@ function showConfirmation(attendance, { duplicate = false } = {}) {
   $("confirmSession").textContent = sessionLabel(attendance.session_type || attendance.session_name);
   $("confirmDate").textContent = attendance.attendance_date ? dateLabel(attendance) : "—";
   $("confirmTime").textContent = timeLabel(attendance);
+  const utcEl = $("confirmUtc");
+  if (utcEl) {
+    const canonical = utcLabel(attendance);
+    utcEl.textContent = canonical || "—";
+    utcEl.title = canonical ? "Canonical backend timestamp (scanned_at)" : "";
+  }
 
   // attendance_action is returned by the backend; we display it verbatim and never
   // branch on its value (Engineer B owns the enum).
@@ -691,10 +943,14 @@ function showConfirmation(attendance, { duplicate = false } = {}) {
   card.classList.toggle("duplicate", duplicate);
   $("confirmationMark").textContent = duplicate ? "!" : "✓";
   $("confirmationEyebrow").textContent = duplicate ? "ALREADY RECORDED" : "ATTENDANCE VERIFIED";
-  $("confirmationTitle").textContent = duplicate ? "Already checked in" : "You're checked in!";
+  const checkpoint = sessionLabel(attendance.session_type || attendance.session_name);
+  const verb = String(attendance.attendance_action || "").toLowerCase() === "check_out" ? "check-out" : "check-in";
+  $("confirmationTitle").textContent = duplicate
+    ? `${checkpoint} already recorded`
+    : `${checkpoint} ${verb} confirmed`;
   $("confirmationSubtitle").textContent = duplicate
-    ? "Already checked in for this session. This is the record we already have for you."
-    : "Your attendance has been recorded successfully.";
+    ? `You already completed the ${checkpoint.toLowerCase()} checkpoint today. This is the record on file.`
+    : `Your ${checkpoint.toLowerCase()} attendance was recorded by the server.`;
 
   $("confirmationModal").classList.remove("hidden");
   $("confirmationModal").querySelector(".confirmation-card").focus();
@@ -714,6 +970,10 @@ function setConnectionNote() {
 function wireEvents() {
   $("loginFormEl").addEventListener("submit", handleLogin);
   $("logoutBtn").addEventListener("click", handleLogout);
+  window.addEventListener("pagehide", () => { stopScanner(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") stopScanner();
+  });
   $("dashboardScanBtn").addEventListener("click", () => showView("scanner"));
   $("startScanBtn").addEventListener("click", startScanner);
   $("stopScanBtn").addEventListener("click", stopScanner);
@@ -734,14 +994,14 @@ function wireEvents() {
     button.addEventListener("click", () => showView(button.dataset.go));
   });
   $("monthFilter").addEventListener("change", () => {
-    state.historyMonth = $("monthFilter").value || watMonthKey();
+    state.historyMonth = $("monthFilter").value || campusMonthKey();
     renderHistory();
   });
 }
 
 function init() {
   $("year").textContent = String(new Date().getFullYear());
-  state.dashboardMonth = watMonthKey();
+  state.dashboardMonth = campusMonthKey();
   state.historyMonth = state.dashboardMonth;
   $("monthFilter").value = state.dashboardMonth;
   setConnectionNote();
@@ -751,4 +1011,3 @@ function init() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
-

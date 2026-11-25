@@ -68,7 +68,7 @@ button{font-family:inherit}
   box-shadow:4px 0 24px -8px rgba(5,32,84,.45);
 }
 .brand{display:flex;flex-direction:column;gap:10px;text-decoration:none;padding:0 6px 26px}
-.brand-logo{height:70px;width:182px;display:block;filter:none;background:#fff;padding:0;border-radius:0}
+.brand-logo{height:30px;width:auto;display:block;filter:brightness(0) invert(1)}
 .brand-text{display:flex;flex-direction:column;gap:2px}
 .brand-text small{
   font-family:var(--font-display);font-size:9px;font-weight:800;
@@ -125,7 +125,7 @@ button{font-family:inherit}
 }
 .mobile-menu{
   display:none;background:#fff;border:1px solid var(--border);border-radius:10px;
-  width:38px;height:38px;font-size:16px;color:var(--fg);cursor:pointer;
+  width:44px;height:44px;font-size:17px;color:var(--fg);cursor:pointer;
 }
 
 /* ---------------------------------- views -------------------------------- */
@@ -161,7 +161,7 @@ button{font-family:inherit}
 .secondary-btn:disabled{opacity:.55;cursor:not-allowed}
 .text-btn{
   background:none;border:0;color:var(--primary);font-weight:700;font-size:12.5px;
-  cursor:pointer;padding:4px 0;
+  cursor:pointer;padding:4px 0;min-height:44px;display:inline-flex;align-items:center;
 }
 .text-btn:hover{color:var(--primary-600);text-decoration:underline}
 
@@ -304,7 +304,7 @@ tbody td strong{font-weight:700}
   border-radius:16px;padding:30px;box-shadow:var(--shadow-large);
 }
 .auth-brand{display:flex;justify-content:center;margin-bottom:22px}
-.auth-brand .brand-logo{height:70px;width:182px;filter:none}
+.auth-brand .brand-logo{height:34px;width:auto;filter:none}
 .auth-card h2{font-size:21px;margin:6px 0 6px}
 .auth-tabs{
   display:flex;gap:4px;background:var(--muted);border-radius:11px;
@@ -417,7 +417,7 @@ tbody td strong{font-weight:700}
   .panel-heading,.history-toolbar{padding:15px 16px}
   thead th,tbody td{padding:11px 16px}
   .auth-card{padding:24px 20px;border-radius:14px}
-  .auth-brand .brand-logo{height:70px;width:182px}
+  .auth-brand .brand-logo{height:30px}
 }
 
 /* ==========================================================================
@@ -461,4 +461,3 @@ tbody td strong{font-weight:700}
 /* --- duplicate confirmation --- */
 .confirmation-card.duplicate .success-mark{background:rgba(245,159,10,.16);color:#9a6106}
 .confirmation-card.duplicate #confirmationEyebrow{color:#9a6106}
-

@@ -1,15 +1,16 @@
 # Shared files between PR #3 and PR #4
 
-Both pull requests touch the same seven files. Each one is clean against `main`
+Both pull requests touch the same eight files. Each one is clean against `main`
 on its own, so the conflict only appears when the second PR lands. This page
 records who owns what and which PR merges first.
 
 Computed from the two pull requests on 25 November 2026 by intersecting their
-changed-file lists (`GET /pulls/{number}/files`). PR #3 changes 32 files, PR #4
-changes 75, and these seven appear in both.
+changed-file lists (`GET /pulls/{number}/files`). PR #3 changes 34 files, PR #4
+changes 76, and these eight appear in both.
 
 | File | PR #3 (Partner A) | PR #4 (Partner B) | Owner after merge |
 |---|---|---|---|
+| `.gitignore` | modified | modified | Shared; preserve compatible rules |
 | `API_CONTRACT.md` | modified +164 / −135 | modified +3 / −1 | Partner A |
 | `README.md` | modified +300 / −609 | modified +31 / −701 | Split by section |
 | `app.js` | modified +842 / −294 | modified +60 / −423 | Partner B |
