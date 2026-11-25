@@ -1,4 +1,7 @@
 import uuid
+from zoneinfo import ZoneInfo
+
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -237,8 +240,26 @@ class AttendanceLog(models.Model):
         ordering = ["-scanned_at", "student__user__username"]
 
     @property
+    def campus_timezone(self):
+        """IANA timezone this record's campus-local values are expressed in."""
+        return self.campus.timezone if self.campus_id else settings.TIME_ZONE
+
+    def local_scan_time(self):
+        """The scan instant rendered in its own campus timezone, not the server default."""
+        if not self.scanned_at:
+            return None
+        return timezone.localtime(self.scanned_at, timezone=ZoneInfo(self.campus_timezone))
+
+    @property
+    def scan_time_local(self):
+        local = self.local_scan_time()
+        return local.strftime("%H:%M:%S") if local else "—"
+
+    @property
     def scan_time_wat(self):
-        return timezone.localtime(self.scanned_at).strftime("%H:%M:%S") if self.scanned_at else "—"
+        # Legacy field name retained for existing clients. The value is the campus-local
+        # clock time, which is WAT only for Africa/Lagos campuses.
+        return self.scan_time_local
 
 
 class AttendanceAdjustment(models.Model):

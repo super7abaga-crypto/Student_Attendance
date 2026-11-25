@@ -1,11 +1,11 @@
 import csv
 import hashlib
 import io
-import json
 import math
 import secrets
 import uuid
 from datetime import datetime, time, timedelta
+from datetime import timezone as dt_timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from django.conf import settings
@@ -22,6 +22,17 @@ DEFAULT_SCHEDULES = {
 }
 LOCATION_DENIED = "Attendance denied. You must be physically present within your assigned Learn2Earn campus to scan."
 QR_SALT = "learn2earn.attendance.qr.v1"
+
+
+def iso_utc(value):
+    """Render a datetime as an explicit UTC ISO 8601 instant (``...Z``).
+
+    API timestamps are instants, not wall-clock times: UTC keeps them unambiguous,
+    and campus-local wall clocks are exposed separately with their offset.
+    """
+    if value is None:
+        return None
+    return value.astimezone(dt_timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class QRValidationError(ValueError):
@@ -139,7 +150,11 @@ def mint_qr(session_run):
     signed = signing.dumps(payload, key=settings.QR_SIGNING_SECRET, salt=QR_SALT, compress=True)
     QRToken.objects.create(id=jti, session_run=session_run,
         nonce_hash=hashlib.sha256((jti + nonce).encode()).hexdigest(), issued_at=now, expires_at=expiry)
-    return {"version": 1, "token": signed, "expires_at": int(expiry.timestamp())}
+    # `expires_at` stays a Unix epoch second for the existing kiosk countdown. The ISO
+    # fields are the unambiguous instants; both describe the same moment in UTC.
+    return {"version": 1, "token": signed, "expires_at": int(expiry.timestamp()),
+            "issued_at": iso_utc(now), "expires_at_iso": iso_utc(expiry),
+            "expires_in_seconds": 30}
 
 
 def verify_qr(token, *, campus=None, session_type=None, attendance_action=None, at=None):
@@ -338,8 +353,10 @@ def csv_safe(value):
 
 
 def report_for(campus, year, month, actor=None):
-    start = datetime(year, month, 1, tzinfo=timezone.get_current_timezone())
-    end = datetime(year + (month == 12), 1 if month == 12 else month + 1, 1, tzinfo=timezone.get_current_timezone())
+    # Month boundaries follow the campus timezone, never the server default.
+    campus_tz = ZoneInfo(campus.timezone)
+    start = datetime(year, month, 1, tzinfo=campus_tz)
+    end = datetime(year + (month == 12), 1 if month == 12 else month + 1, 1, tzinfo=campus_tz)
     day = start.date()
     while day < end.date():
         materialize_absences(campus, day)

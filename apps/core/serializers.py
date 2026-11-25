@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
-from .models import AttendanceLog, Campus, Cohort, SessionSchedule, Student, Track, User
+from .models import AttendanceLog, Campus, SessionSchedule, Student, User
+from .services import iso_utc
 
 
 class APIResponseSerializer(serializers.Serializer):
@@ -63,10 +64,12 @@ class StudentSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(source="user.email", read_only=True)
     track_name = serializers.CharField(source="track.name", read_only=True)
     cohort_name = serializers.CharField(source="cohort.name", read_only=True)
+    campus_name = serializers.CharField(source="campus.name", read_only=True)
+    campus_timezone = serializers.CharField(source="campus.timezone", read_only=True)
 
     class Meta:
         model = Student
-        fields = ["id", "student_code", "username", "full_name", "email", "campus", "track", "track_name", "cohort", "cohort_name", "registration_date", "active", "profile"]
+        fields = ["id", "student_code", "username", "full_name", "email", "campus", "campus_name", "campus_timezone", "track", "track_name", "cohort", "cohort_name", "registration_date", "active", "profile"]
         read_only_fields = ["id", "registration_date", "campus", "active", "username", "full_name", "email"]
 
     def validate(self, attrs):
@@ -83,10 +86,23 @@ class AttendanceSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(source="student.user.full_name", read_only=True)
     student_id = serializers.UUIDField(source="student.id", read_only=True)
     campus_name = serializers.CharField(source="campus.name", read_only=True)
+    campus_timezone = serializers.CharField(source="campus.timezone", read_only=True)
+    # Instants are UTC; wall-clock values are campus-local with an explicit offset.
+    scanned_at = serializers.SerializerMethodField()
+    scanned_at_local = serializers.SerializerMethodField()
+    scan_time_local = serializers.CharField(read_only=True)
+    # Legacy field name kept for existing clients; now the campus-local clock time.
     scan_time_wat = serializers.CharField(read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     source_label = serializers.CharField(source="get_source_display", read_only=True)
     record_kind = serializers.SerializerMethodField()
+
+    def get_scanned_at(self, obj) -> str | None:
+        return iso_utc(obj.scanned_at)
+
+    def get_scanned_at_local(self, obj) -> str | None:
+        local = obj.local_scan_time()
+        return local.isoformat() if local else None
 
     def get_record_kind(self, obj) -> str:
         if obj.status == AttendanceLog.Status.ABSENT:
@@ -97,7 +113,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AttendanceLog
-        fields = ["id", "full_name", "username", "student_id", "campus", "campus_name", "track_name", "cohort_name", "record_kind", "session_type", "attendance_action", "attendance_date", "scanned_at", "scan_time_wat", "status", "status_label", "source", "source_label", "location_verified", "location_accuracy_m", "location_distance_m"]
+        fields = ["id", "full_name", "username", "student_id", "campus", "campus_name", "campus_timezone", "track_name", "cohort_name", "record_kind", "session_type", "attendance_action", "attendance_date", "scanned_at", "scanned_at_local", "scan_time_local", "scan_time_wat", "status", "status_label", "source", "source_label", "location_verified", "location_accuracy_m", "location_distance_m"]
 
 
 class StudentCreateSerializer(serializers.Serializer):

@@ -25,9 +25,19 @@ from .models import (AttendanceAdjustment, AttendanceLog, AuditLog, Campus, Camp
 from .permissions import StaffRolePermission
 from .serializers import (AttendanceSerializer, CampusSerializer, ScheduleSerializer,
                           StudentCreateSerializer, StudentSerializer, APIResponseSerializer)
-from .services import (DEFAULT_SCHEDULES, accessible_campuses, audit, csv_safe, manual_adjustment,
+from .services import (DEFAULT_SCHEDULES, accessible_campuses, audit, csv_safe, iso_utc, manual_adjustment,
                        mint_qr, report_for, schedule_for, summary_for, user_can_access, user_can_export,
                        verify_qr, record_scan, QRValidationError, ScanLocationError, status_for_attendance_time)
+
+
+def format_offset(offset):
+    """Render a UTC offset as ``+01:00`` style text for clients that show it."""
+    if offset is None:
+        return None
+    total = int(offset.total_seconds())
+    sign = "+" if total >= 0 else "-"
+    total = abs(total)
+    return f"{sign}{total // 3600:02d}:{(total % 3600) // 60:02d}"
 
 
 def scoped_campus(user, campus_id, *, manage=False, correct=False):
@@ -64,7 +74,7 @@ class StudentLoginView(APIView):
         if token and token.created <= timezone.now()-timedelta(hours=12): token.delete(); token=None
         if token is None: token=Token.objects.create(user=user)
         audit(user, "student.login", campus=profile.campus, request=request)
-        return Response({"success": True, "token": token.key, "student": {"id": str(profile.pk), "full_name": user.full_name, "username": user.username, "campus": str(profile.campus_id), "campus_name": profile.campus.name}})
+        return Response({"success": True, "token": token.key, "student": {"id": str(profile.pk), "full_name": user.full_name, "username": user.username, "campus": str(profile.campus_id), "campus_name": profile.campus.name, "campus_timezone": profile.campus.timezone}})
 
 
 class MentorLoginView(APIView):
@@ -513,7 +523,10 @@ class AttendanceSummaryView(APIView):
         from zoneinfo import ZoneInfo
         now=timezone.now()
         day=parse_date(request.query_params.get("date", "")) or timezone.localtime(now,ZoneInfo(campus.timezone)).date()
-        return Response({"campus":CampusSerializer(campus).data,"date":day,"timezone":campus.timezone,"summary":summary_for(campus,day,now)})
+        offset=timezone.localtime(now,ZoneInfo(campus.timezone)).utcoffset()
+        return Response({"campus":CampusSerializer(campus).data,"date":day,"timezone":campus.timezone,
+                         "timezone_offset":format_offset(offset),"generated_at":iso_utc(now),
+                         "summary":summary_for(campus,day,now)})
 
 
 class AttendanceManualView(APIView):
