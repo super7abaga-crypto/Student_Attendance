@@ -56,13 +56,13 @@ Historical whole-day absence rows retain their original session/action values. N
 
 Request: `{ "username": "ada.okafor", "password": "…" }`. Username is normalized to lowercase with whitespace removed.
 
-Success (`200`): `{ "success": true, "token": "…", "student": { "id", "full_name", "username", "campus", "campus_name" } }`.
+Success (`200`): `{ "success": true, "token": "…", "student": { "id", "full_name", "username", "campus", "campus_name", "campus_timezone" } }`.
 
 Errors: `401 invalid_credentials`; `403 student_inactive`.
 
 ### `GET /student/profile/`
 
-Requires authentication; student profile only. Returns the `StudentSerializer` object directly, with `id`, `student_code`, `username`, `full_name`, `email`, `campus`, `track`, `track_name`, `cohort`, `cohort_name`, `registration_date`, `active`, and `profile`. Missing student profile or inactive student returns `403`.
+Requires authentication; student profile only. Returns the `StudentSerializer` object directly, with `id`, `student_code`, `username`, `full_name`, `email`, `campus`, `campus_name`, `campus_timezone`, `track`, `track_name`, `cohort`, `cohort_name`, `registration_date`, `active`, and `profile`. Missing student profile or inactive student returns `403`.
 
 ### `GET /student/attendance-history/`
 
@@ -83,7 +83,9 @@ Requires student token, QR token (or version-1 QR envelope in `qr_payload`), and
 
 Success (`201`): `{ "success": true, "attendance": <AttendanceSerializer> }`.
 
-The serializer fields are `id`, `full_name`, `username`, `student_id`, `campus`, `campus_name`, `track_name`, `cohort_name`, `record_kind`, `session_type`, `attendance_action`, `attendance_date`, `scanned_at`, `scan_time_wat`, `status`, `status_label`, `source`, `source_label`, `location_verified`, `location_accuracy_m`, and `location_distance_m`. `record_kind` is additive: `attendance` for present/late rows, `system_absence` for generated checkpoint absences, `manual_absence` for mentor-entered absences. `source` is `qr`, `manual`, or `system`; generated checkpoint absences use `source: "system"` / `source_label: "Automated system"` after migration 0005.
+The serializer fields are `id`, `full_name`, `username`, `student_id`, `campus`, `campus_name`, `campus_timezone`, `track_name`, `cohort_name`, `record_kind`, `session_type`, `attendance_action`, `attendance_date`, `scanned_at`, `scanned_at_local`, `scan_time_local`, `scan_time_wat`, `status`, `status_label`, `source`, `source_label`, `location_verified`, `location_accuracy_m`, and `location_distance_m`.
+
+Timestamps have explicit semantics. `scanned_at` is a UTC instant in ISO 8601 form ending in `Z`. `scanned_at_local` is the same instant in the campus timezone with an explicit offset, `scan_time_local` is the campus clock time as `HH:MM:SS`, and `campus_timezone` is the IANA name those local values use. `scan_time_wat` is retained for existing clients and now returns the same campus-local value as `scan_time_local`; it is only literally WAT for `Africa/Lagos` campuses. `attendance_date` is always the campus-local date. `record_kind` is additive: `attendance` for present/late rows, `system_absence` for generated checkpoint absences, `manual_absence` for mentor-entered absences. `source` is `qr`, `manual`, or `system`; generated checkpoint absences use `source: "system"` / `source_label: "Automated system"` after migration 0005.
 
 The server validates signed QR token, 30-second expiry, active session and schedule, assigned campus, GPS accuracy, and geofence. If campus coordinates are missing, scanning fails closed with `403 location_unconfigured`.
 
@@ -124,11 +126,11 @@ Except for public login, these endpoints require staff authentication and campus
 | `GET /admin/students/export/?campus=<uuid>` | CSV roster export; export permission required. |
 | `POST /admin/students/bulk_import/?campus_id=<uuid>` | Staff CSV import; max 2 MB and 5,000 rows. Returns `{created, errors}`. |
 | `POST /mentor/qr/start/` with `{campus_id, session_type}` | Mentor/admin opens one scheduled session; returns `{session_id, campus, session_type, attendance_action, state}`. Invalid window `400 outside_session_window`; closed run `400 session_closed`. |
-| `GET /mentor/qr/current/?campus_id=<uuid>&session_type=morning` | Mints a signed QR envelope valid for 30 seconds. Response includes `version`, `token`, `expires_at`, `qr_payload`, `qr_image_url`, `session_id`, `campus`, `campus_id`, `session_type`, `attendance_action`, `state`, `expires_in_seconds`. No active session/window is `409 session_closed` or `409 outside_session_window`. |
+| `GET /mentor/qr/current/?campus_id=<uuid>&session_type=morning` | Mints a signed QR envelope valid for 30 seconds. Response includes `version`, `token`, `expires_at`, `issued_at`, `expires_at_iso`, `qr_payload`, `qr_image_url`, `session_id`, `campus`, `campus_id`, `session_type`, `attendance_action`, `state`, `expires_in_seconds`. `expires_at` remains a Unix epoch second for the kiosk countdown; `issued_at` and `expires_at_iso` are the same instants as UTC ISO 8601. No active session/window is `409 session_closed` or `409 outside_session_window`. |
 | `GET /mentor/qr/image/?token=<signed-token>` | No-store PNG for an authorized staff member with access to the QR's campus. |
 | `POST /mentor/qr/end/` with `{session_id}` | Closes the run and revokes outstanding QR tokens. Unknown run is `404 session_not_found`. |
 | `GET /mentor/attendance/?campus_id=<uuid>[&date=YYYY-MM-DD&date_from=…&date_to=…&status=present|late|absent&session_type=…&source=…&track_name=…&cohort_name=…&search=…]` | Paginated response (`count`, `next`, `previous`, `results`), 50 rows/page. Date-specific calls materialize absences for closed checkpoints. `format=csv` returns protected CSV, requires export permission, and escapes spreadsheet formula values with a leading apostrophe. |
-| `GET /mentor/attendance/summary/?campus_id=<uuid>[&date=YYYY-MM-DD]` | `{campus: <CampusSerializer>, date, timezone, summary: <object>}`. Summary keys include daily `active_students`, `present`, `late`, `absent`, `incomplete`, `pending`, `not_checked_out`, `attendance_percentage`, `completed_sessions`; checkpoint counts are in `checkpoints.morning`, `.afternoon`, and `.evening`. `morning_check_ins` and `afternoon_check_ins` count successful check-ins; `evening_check_outs` counts successful check-outs. |
+| `GET /mentor/attendance/summary/?campus_id=<uuid>[&date=YYYY-MM-DD]` | `{campus: <CampusSerializer>, date, timezone, timezone_offset, generated_at, summary: <object>}`. `timezone` is the campus IANA name, `timezone_offset` is that campus's UTC offset as `+01:00` style text, and `generated_at` is a UTC instant. Summary keys include daily `active_students`, `present`, `late`, `absent`, `incomplete`, `pending`, `not_checked_out`, `attendance_percentage`, `completed_sessions`; checkpoint counts are in `checkpoints.morning`, `.afternoon`, and `.evening`. `morning_check_ins` and `afternoon_check_ins` count successful check-ins; `evening_check_outs` counts successful check-outs. |
 | `POST /mentor/attendance/manual/` | Audited status correction or per-checkpoint row creation. A reason is mandatory. A student/date/checkpoint duplicate returns `409 duplicate_attendance`. |
 | `POST /mentor/attendance/location-override/` | Mentor/admin audited override requires a matching location rejection from the same session within 15 minutes, today's campus-local date, an open monthly report, a reason, and campus correction access. |
 | `GET /admin/reports/?campus_id=<uuid>&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD` | `{results: [{campus, records, present, late, absent, by_session}]}` for accessible campuses. |
