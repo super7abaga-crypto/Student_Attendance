@@ -4,6 +4,23 @@ This document describes the checked-in Django implementation. API paths below ar
 
 ## Attendance and time rules
 
+### Timezone and timestamp semantics
+
+`Campus.timezone` is the authoritative IANA timezone for attendance dates, checkpoint
+windows, lateness, daily summaries, and automated absences. The backend converts the
+server's current instant into that campus timezone before selecting `attendance_date` or
+evaluating a schedule; clients must not derive the attendance date from the device clock.
+The campus timezone is returned in campus objects and in the mentor summary response.
+
+`scanned_at` is the immutable server-side instant at which a successful scan was recorded,
+serialized as an ISO-8601 timestamp with an explicit UTC offset (normally `Z`). It is not
+the phone's time and must be treated as an instant. `scan_time_wat` is a display-only
+`HH:MM:SS` value formatted in the attendance campus timezone (currently WAT for
+`Africa/Lagos`). `attendance_date` is the campus-local calendar date and may differ from
+the UTC date around midnight. The portal should display `scan_time_wat` and use
+`attendance_date` for grouping; it must not recalculate either value from local device
+time.
+
 The database allows one record per student, campus-local date, and checkpoint. The three checkpoints are morning check-in, afternoon check-in, and evening check-out. A duplicate scan in the same checkpoint returns `409 duplicate_attendance`; the same student may scan at later checkpoints on that date. Status values are `present`, `late`, and `absent`.
 
 For the default Africa/Lagos schedule, morning and afternoon scans are `present` through the configured `late_after` minute, and `late` from the next minute onward (09:11 and 13:11 by default). Evening is a checkout and is never marked late. Each missed checkpoint is persisted as `absent` after its own close time. The daily summary marks a student `present` only after all three checkpoints, `late` if all three are complete and either check-in is late, `incomplete` if at least one checkpoint is completed but not all, and `absent` if both check-in windows close without a successful check-in. It marks `pending` before then when no successful checkpoint is recorded.
