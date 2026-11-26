@@ -426,7 +426,7 @@ Known frontend limitations:
 | Attendance history + month filter | Implemented |
 | `/student/` relative paths | Implemented, verified locally |
 | Live Django integration | **Blocked** — API not reachable |
-| Daily (one-per-day) attendance rule | **Pending decision**, not implemented anywhere in this repo |
+| Three-checkpoint attendance (morning check-in, afternoon check-in, evening checkout) | **Implemented and approved** |
 
 ## Change log
 
