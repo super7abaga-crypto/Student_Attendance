@@ -56,7 +56,9 @@ ADAPTER_RULES = (
 
 
 def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Normalize CRLF/LF so the manifest is portable between Windows and CI.
+    data = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()
 
 
 def adapt_index(source_html: str) -> str:
