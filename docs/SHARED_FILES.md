@@ -4,9 +4,11 @@ Both pull requests touch the same eight files. Each one is clean against `main`
 on its own, so the conflict only appears when the second PR lands. This page
 records who owns what and which PR merges first.
 
-Computed from the two pull requests on 25 November 2026 by intersecting their
-changed-file lists (`GET /pulls/{number}/files`). PR #3 changes 34 files, PR #4
-changes 76, and these eight appear in both.
+Computed from the two pull requests on 26 November 2026 by intersecting their
+changed-file lists against `main` (`00d25e8`): `git diff --name-only 00d25e8 <head>`.
+PR #3 (`b108f5e`) changes 37 files, PR #4 (`cf8fb6b`) changes 82, and these eight
+appear in both. Re-run those two commands rather than trusting these numbers; they
+move whenever either branch gains a file.
 
 | File | PR #3 (Partner A) | PR #4 (Partner B) | Owner after merge |
 |---|---|---|---|
