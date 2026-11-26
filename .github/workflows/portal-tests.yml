@@ -1,0 +1,173 @@
+name: Portal tests
+
+# Issue #5/#6 follow-up: PR #3 had no automated checks at all. These three jobs
+# run the portal's own suites on every pull request into main, including the
+# Django end-to-end run against an isolated PostgreSQL database.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Portal contract (api-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Contract suite
+        run: python3 tests/api-test.py
+
+  browser:
+    name: Browser suite (mock server)
+    runs-on: ubuntu-latest
+    env:
+      APP_SECRET: ci-mock-app-secret
+      QR_SECRET: ci-mock-qr-secret
+      # The suite drives the mock with a pinned clock so checkpoint availability
+      # does not depend on the hour the job happens to run.
+      MOCK_NOW_WAT: "09:05"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+      - name: Install suite dependencies
+        run: cd tests && npm ci
+      - name: Ensure Chrome is available
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          elif command -v chromium >/dev/null 2>&1; then
+            chromium --version
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq chromium-browser || sudo apt-get install -y -qq chromium
+          fi
+      - name: Start the mock server
+        run: |
+          nohup python3 server.py > "$RUNNER_TEMP/mock.log" 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/student/ >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::mock server did not start"; tail -50 "$RUNNER_TEMP/mock.log"; exit 1
+
+      - name: Browser suite
+        run: cd tests && npm test
+
+      - name: Mock server log on failure
+        if: failure()
+        run: tail -50 "$RUNNER_TEMP/mock.log" || true
+
+  django-e2e:
+    name: Django E2E (isolated PostgreSQL)
+    runs-on: ubuntu-latest
+    # The database name contains "e2e", which is what tests/e2e-guard.js requires
+    # before it will touch anything. The service container is disposable.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: e2e_portal_ci
+          POSTGRES_USER: portal
+          POSTGRES_PASSWORD: portal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U portal -d e2e_portal_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgresql://portal:portal@127.0.0.1:5432/e2e_portal_ci
+      BACKEND_BRANCH: feat/engineer-b-attendance
+      ATTENDANCE_SECRET: ci-only-attendance-signing-secret-0123456789
+      DJANGO_SECRET_KEY: ci-only-django-secret-key-0123456789abcdef
+      CORS_ALLOWED_ORIGINS: http://127.0.0.1:8020
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+
+      - name: Refuse anything but a disposable database name
+        run: |
+          if ! echo "$DATABASE_URL" | grep -qE '(^|[/_.-])(e2e|test|sandbox)([/_.-]|$)'; then
+            echo "::error::DATABASE_URL does not look disposable; refusing to run the E2E suite"
+            exit 1
+          fi
+
+      - name: Fetch Partner B's Django backend
+        run: |
+          git clone --depth=1 --branch "$BACKEND_BRANCH" \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            "$RUNNER_TEMP/backend"
+
+      - name: Install backend dependencies
+        run: python3 -m pip install -r "$RUNNER_TEMP/backend/requirements.txt"
+
+      - name: Migrate the isolated E2E database
+        working-directory: ${{ runner.temp }}/backend
+        run: python3 manage.py migrate --noinput
+
+      - name: Start the backend
+        working-directory: ${{ runner.temp }}/backend
+        run: |
+          nohup python3 manage.py runserver 127.0.0.1:8010 --noreload > "$RUNNER_TEMP/backend.log" 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8010/health/ >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::backend did not become healthy"; tail -50 "$RUNNER_TEMP/backend.log"; exit 1
+
+      - name: Serve the portal
+        run: |
+          nohup python3 -m http.server 8020 --bind 127.0.0.1 --directory . > "$RUNNER_TEMP/portal.log" 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8020/index.html >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::portal did not start"; tail -50 "$RUNNER_TEMP/portal.log"; exit 1
+
+      - name: Install suite dependencies
+        run: cd tests && npm ci
+
+      - name: Ensure Chrome is available
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          elif command -v chromium >/dev/null 2>&1; then
+            chromium --version
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq chromium-browser || sudo apt-get install -y -qq chromium
+          fi
+
+      - name: Django end-to-end suite
+        working-directory: tests
+        env:
+          DJANGO_DIR: ${{ runner.temp }}/backend
+          API_BASE: http://127.0.0.1:8010/api/v1
+          PORTAL_URL: http://127.0.0.1:8020/index.html
+        run: node e2e-django.js
+
+      - name: Backend log on failure
+        if: failure()
+        run: tail -100 "$RUNNER_TEMP/backend.log" || true
