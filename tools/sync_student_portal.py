@@ -114,7 +114,7 @@ def write(source: Path, source_commit: str | None = None) -> int:
 
     for name in VERBATIM:
         (STATIC / name).write_bytes((source / name).read_bytes())
-    TEMPLATE.write_text(adapt_index((source / "index.html").read_text()))
+    TEMPLATE.write_text(adapt_index((source / "index.html").read_text(encoding="utf-8")), encoding="utf-8")
 
     commit = source_commit or "unknown"
     if not source_commit:
@@ -131,7 +131,7 @@ def write(source: Path, source_commit: str | None = None) -> int:
         "adapter": "tools/sync_student_portal.py (static paths and CDN fallback only)",
         "files": current_hashes(),
     }
-    MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n")
+    MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"Synced from {commit}: " + ", ".join(manifest["files"]))
     return 0
 

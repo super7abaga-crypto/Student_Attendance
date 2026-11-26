@@ -7,6 +7,7 @@ the route stops serving the vendored assets.
 """
 
 import hashlib
+
 import sys
 from pathlib import Path
 
@@ -48,10 +49,11 @@ class StudentPortalCopyTests(TestCase):
     def test_adapter_reproduces_the_committed_template(self):
         """The sync tool must be able to regenerate exactly what is committed."""
         manifest = sync.load_manifest()
-        template = (REPO / "templates" / "student" / "index.html").read_text()
+        template_path = REPO / "templates" / "student" / "index.html"
+        template = template_path.read_text(encoding="utf-8")
         self.assertIn("{% load static %}", template)
         self.assertNotIn("document.write(", template)
-        self.assertEqual(hashlib.sha256(template.encode()).hexdigest(),
+        self.assertEqual(sync.digest(template_path),
                          manifest["files"]["index.html"])
 
     def test_portal_route_serves_the_three_checkpoint_portal(self):
