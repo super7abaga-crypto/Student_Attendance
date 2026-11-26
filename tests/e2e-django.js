@@ -11,9 +11,12 @@ const API = process.env.API_BASE || 'http://127.0.0.1:8010/api/v1';
 const PORTAL = process.env.PORTAL_URL || 'http://127.0.0.1:8020/index.html';
 const SHOTS = process.env.SHOTS || path.join(__dirname, 'screenshots');
 const CHROME = process.env.CHROME_PATH || '/usr/bin/google-chrome';
-const ENV = { ...process.env, DJANGO_SETTINGS_MODULE: 'config.settings.dev',
-  ATTENDANCE_SECRET: 'local-audit-qr-secret-0123456789abcdef',
-  DJANGO_SECRET_KEY: 'local-audit-django-secret-0123456789abcdef' };
+// These secrets must match the ones the backend under test is running with, or the
+// QR tokens minted here fail signature verification on the server. CI supplies its
+// own values, so honour the environment and fall back to the documented local pair.
+const ENV = { ...process.env, DJANGO_SETTINGS_MODULE: process.env.DJANGO_SETTINGS_MODULE || 'config.settings.dev',
+  ATTENDANCE_SECRET: process.env.ATTENDANCE_SECRET || 'local-audit-qr-secret-0123456789abcdef',
+  DJANGO_SECRET_KEY: process.env.DJANGO_SECRET_KEY || 'local-audit-django-secret-0123456789abcdef' };
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail = '') => {
