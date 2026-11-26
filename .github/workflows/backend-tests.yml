@@ -39,6 +39,8 @@ jobs:
       - run: python manage.py check
       - name: Refuse a model change without a migration
         run: python manage.py makemigrations --check --dry-run
+      - name: Student portal copy matches Partner A's recorded source
+        run: python tools/sync_student_portal.py --check
       - name: pytest suite on SQLite
         run: python -m pytest -q
 

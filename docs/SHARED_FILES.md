@@ -80,3 +80,25 @@ Reasons:
 5. CEO approval for PR #3.
 
 No merge happens before the approval in step 2 and step 5.
+
+## Keeping the served portal in sync
+
+`static/student/app.js`, `static/student/styles.css` and `templates/student/index.html`
+are a served copy of Partner A's portal. A manual copy drifts, which is exactly how the
+21 November snapshot survived into this branch. The copy is now recorded in
+`static/student/PORTAL_SOURCE.json` (source commit plus a sha256 per file) and only
+`tools/sync_student_portal.py` should change it:
+
+```bash
+# verify the committed copy against the recorded source
+python3 tools/sync_student_portal.py --check
+
+# re-copy from a Partner A checkout (app.js and styles.css verbatim; index.html
+# through the small static-path adapter) and rewrite the manifest
+python3 tools/sync_student_portal.py --source ../student-portal --write
+```
+
+`--check` runs in CI before the test suite, and
+`apps/core/tests/test_student_portal_copy.py` additionally asserts that `/student/`
+serves the three-checkpoint portal and that the served `app.js` is the recorded copy.
+Drift therefore fails the build instead of shipping silently.
