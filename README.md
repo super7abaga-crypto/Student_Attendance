@@ -1,718 +1,443 @@
-# LEARN 2EARN — Student Attendance Portal (Engineer A)
+# LEARN 2EARN — Student Attendance Portal
 
-A responsive, browser-based student portal for the LEARN 2EARN attendance system. It lets a
-student register, sign in, see their attendance record, and check in by scanning the QR code
-their mentor displays.
+Engineer A's student-facing half of the Learn2Earn Attendance System: a responsive,
+framework-free browser portal that signs students in, scans the mentor's session QR code,
+sends the scan with a fresh GPS fix, and shows the attendance record the backend returns.
 
-**This repository is Engineer A's student-facing module plus a local development server.**
-It is not the production attendance backend. Engineer B owns the real backend, the real
-database and the QR issuing kiosk. Section 16 explains the split.
+Engineer B owns the Django backend, the database, QR issuance, geofencing and every
+attendance decision. **This repository is the frontend plus a local mock for development.**
 
----
-
-## Documentation status
-
-This README was written by reading the code in this repository, not from earlier plans or
-discussions. Every endpoint, field, command and behaviour below was checked against
-`server.py`, `app.js`, `index.html`, `dev/kiosk.html` and `API_CONTRACT.md` on 18 November 2026.
-
-Where the approved attendance policy differs from what the code currently does, the
-difference is stated explicitly instead of being hidden. Read section 8 and section 9 before
-assuming the portal already records one attendance per day: **it does not yet.**
-
-| Area | State |
-|------|-------|
-| Registration, login, session handling | Implemented (frontend + local dev API) |
-| Dashboard statistics and recent activity | Implemented |
-| Attendance history with month filter | Implemented |
-| Camera QR scanner and check-in request | Implemented |
-| Check-in confirmation card | Implemented |
-| Local development API (`server.py`) | Implemented, dev only, not hardened |
-| Signed `ATTv1` QR minting (dev kiosk) | Implemented, dev only |
-| One attendance record per student per day | **Pending — code is per session** |
-| Statuses Present / Late / Absent | **Partially — only On Time / Late exist; Absent not implemented** |
-| Production database | **Pending — Engineer B; local server uses a JSON file** |
-| Mentor/admin interface, absence marking, reporting | **Not started** |
+**State of this repository:** the frontend integration is implemented and tested against a
+local mock of the contract. It has **not** been run against Engineer B's Django backend,
+because that API is not reachable yet (see [§15](#15-current-limitations-and-outstanding-work)).
+Nothing here is production-verified.
 
 ---
 
 ## 1. Project overview and objectives
 
-The LEARN 2EARN fellowship runs three teaching sessions a day and needs a trustworthy
-attendance record. The paper-and-signature-sheet process is slow and easy to falsify, so
-attendance is taken by QR code instead.
+- Give each student a single place to sign in, check in by scanning the mentor's QR code, and
+  review their attendance history.
+- Keep attendance authority on the server: the browser never decides whether a QR is valid,
+  whether a student is on campus, or whether a scan is On Time or Late.
+- Stay deployable inside Django at `/student/` without a build step or a JavaScript framework.
+- Work on phones (the primary device), tablets and desktops.
 
-Objectives of this module:
-
-1. Give each student a private account so their attendance is tied to a real identity.
-2. Let a student check in by scanning the mentor's QR code with a phone camera, with no
-   typing and no manual entry.
-3. Make the **server**, never the browser, decide whether a scan counts and whether it is on
-   time or late.
-4. Show the student an immediate, unambiguous result, and a history they can check later.
-5. Refuse duplicate scans instead of silently creating extra records.
-6. Use `Africa/Lagos` (WAT) for every date and time decision, because the institution's day
-   boundaries are WAT boundaries.
-
-Out of scope for Engineer A: the database, the production API, the mentor kiosk, and the
-final decision on attendance policy.
-
----
+Out of scope for Engineer A: enrollment, mentor tooling, QR issuance, geofencing, duplicate
+policy, reporting. Those belong to Engineer B.
 
 ## 2. Current system architecture
 
-```text
-┌──────────────────────────────┐        ┌─────────────────────────────┐
-│  Browser (student's phone)   │        │  Engineer B's backend       │
-│                              │        │  (production, not in repo)  │
-│  index.html + styles.css     │ HTTPS  │  - real database            │
-│  app.js                      │───────▶│  - verifies QR signature    │
-│  vendor/html5-qrcode.min.js  │  JSON  │  - computes status          │
-│                              │        │  - enforces uniqueness      │
-└──────────────────────────────┘        └─────────────────────────────┘
-                │
-                │ during local development only
-                ▼
-┌──────────────────────────────┐        ┌─────────────────────────────┐
-│  server.py (this repo)       │        │  dev/kiosk.html (this repo) │
-│  static files + /api/v1      │◀───────│  asks server.py for a live  │
-│  in-memory + dev/.data.json  │        │  signed test QR             │
-└──────────────────────────────┘        └─────────────────────────────┘
+```
+Student device (browser)
+  index.html + styles.css + app.js
+  vendor/html5-qrcode.min.js          camera decoding, on-device only
+        │
+        │  HTTPS, Authorization: Token <token>
+        ▼
+Engineer B — Django REST API  /api/v1/
+  POST /auth/student/login/      POST /auth/logout/
+  GET  /student/attendance-history/
+  POST /attendance/scan/         QR validation · geofence · status · duplicates
+        │
+        ▼
+Django database (Engineer B)   ← source of truth
+
+Local development only:
+  server.py  = mock of the four student endpoints, JSON file storage
+  dev/kiosk.html = mentor-style QR for scan testing
 ```
 
-- **Frontend**: static files, no framework, no build step. One HTML page with four views
-  (auth, dashboard, scanner, history) plus a confirmation modal.
-- **API base URL**: derived at runtime from `window.location.origin`, so the same build works
-  on `localhost`, on a LAN address and behind an HTTPS tunnel without editing code.
-- **Local API**: `server.py`, Python standard library only. It implements the endpoints in
-  `API_CONTRACT.md` so the portal can be run and demonstrated before Engineer B's backend is
-  available. It also serves the static files.
-- **Storage**: in memory, mirrored to `dev/.data.json`. There is no database engine anywhere
-  in this repository.
-- **QR issuing**: only the dev kiosk in this repository mints codes, and only for testing.
-
----
+The portal holds no attendance logic. It sends the exact decoded QR text plus coordinates and
+renders the response.
 
 ## 3. Repository and folder structure
 
-```text
-Student_Attendance/
-├── index.html               # all markup: auth screen, dashboard, scanner, history, modal
-├── styles.css               # all styling, design tokens, responsive rules
-├── app.js                   # all behaviour; CONFIG block at the top
-├── server.py                # local dev API + static file server (stdlib only)
-├── requirements.txt         # intentionally empty: no third-party packages
-├── API_CONTRACT.md          # the agreed frontend ↔ backend contract with Engineer B
-├── README.md                # this file
-├── LICENSE
-├── .gitignore
-├── assets/
-│   ├── learn2earn-logo.svg  # official Learn2Earn lockup
-│   └── learn2earn-mark.png  # mark-only crop
-├── vendor/
-│   └── html5-qrcode.min.js  # scanner library, vendored so it works offline
-├── dev/
-│   └── kiosk.html           # dev-only page showing a live signed test QR
-├── .vscode/
-│   ├── launch.json          # F5 → run server.py
-│   ├── settings.json
-│   └── extensions.json
-└── favicon.png
 ```
-
-`dev/.data.json` is created at runtime and is git-ignored. It does not exist in a fresh clone.
-
----
+index.html                  single page: login, dashboard, scanner, history
+styles.css                  Learn2Earn design system + integration additions
+app.js                      all behaviour; CONFIG at the top
+favicon.png
+assets/
+  learn2earn-logo.svg       official lockup (sidebar, sign-in card, kiosk)
+  learn2earn-mark.png       mark-only crop
+vendor/
+  html5-qrcode.min.js       vendored scanner library (CDN fallback in index.html)
+  qrcode.min.js             vendored QR library for the dev kiosk
+dev/
+  kiosk.html                dev-only page that shows a live 30-second test QR
+server.py                   dev-only mock of Engineer B's student endpoints
+API_CONTRACT.md             the endpoints, payloads and error codes the portal calls
+HOSTING.md                  what Engineer B needs to serve this at /student/
+docs/screenshots/           evidence captured from the local test run
+requirements.txt            no third-party packages
+LICENSE
+```
 
 ## 4. Student registration and login
 
-**Registration** (`index.html` → `#registerForm`, handler `registerStudent()` in `app.js`).
+**There is no student self-registration.** The pilot is mentor-controlled: accounts and campus
+assignments are created in Engineer B's backend. The login card states this:
 
-| Field | Rule | Where enforced |
-|-------|------|----------------|
-| Full name | at least 2 characters, whitespace collapsed | browser and `server.py` |
-| Attendance username | 3–30 chars, `a-z 0-9 _ -` only, lowercased, spaces removed as you type | browser and `server.py` |
-| Password | at least 8 characters | browser and `server.py` |
-| Confirm password | must match | browser only |
+> Your account must be created by a mentor or administrator. Please contact your mentor to
+> obtain your login details.
 
-Both sides validate on purpose: the browser gives instant feedback, the server refuses to
-trust it. The server also enforces uniqueness and returns `409` with
-`"That username is already taken."` if the username exists.
-
-On success the server returns an access token and the student object, and the UI goes straight
-to the dashboard. If a backend ever returns the student without a token, the UI falls back to
-"Account created. Please sign in with your new details."
-
-**Login** (`#loginForm`, handler `loginStudent()`). Username and password are posted to
-`/auth/login`. A wrong username and a wrong password give the same `401` message,
-`"Incorrect username or password."`, so the endpoint does not reveal which accounts exist.
-
-**Session handling.** The token is held in memory only. `PERSIST_SESSION` in `app.js` is
-`false`, so refreshing the page signs the student out. Set it to `true` to keep the session in
-`sessionStorage` for local demos; that is not a production pattern, because script on the page
-could read it.
-
-**Token expiry.** Tokens last 2 hours (`TOKEN_TTL_MS` in `server.py`). Any `401` clears the
-token, returns the student to the sign-in screen and shows "Your session ended. Please sign in
-again."
-
-**Logout.** `POST /auth/logout` returns `{"ok": true}` and the browser discards the token.
-The dev server does not revoke the token server-side, so a copied token stays valid until it
-expires. See section 15.
-
----
+- `POST /auth/student/login/` with `{username, password}`.
+- The username is lower-cased and stripped of spaces before sending; Django remains the
+  authority on whether the account exists and is active.
+- On success the portal stores `{token, student, savedAt}` in **`sessionStorage`** and shows the
+  student's full name, username and campus in the header and profile panel.
+- Authenticated calls use **`Authorization: Token <token>`**. `Bearer` is never sent.
+- A refresh in the same tab restores the session; a new tab starts at login. Sessions older
+  than **12 hours** are discarded locally.
+- `POST /auth/logout/` is called, then the local session is cleared whether or not the request
+  succeeds.
+- Any `401` clears the session and returns to login with "Your session ended. Please sign in
+  again."
 
 ## 5. Student dashboard and attendance history
 
-**Dashboard** (`#dashboardView`) shows:
+Dashboard (current month, WAT):
 
-- a welcome line with the student's first name;
-- four stat cards for the current WAT month: **Sessions attended**, **On-time attendance**,
-  **Late attendance**, **Attendance rate**;
-- **Recent attendance** — the five newest records for the current month;
-- **My profile** — full name, attendance username, account status.
+- Sessions attended, On-time attendance, Late attendance, and Last check-in.
+- **No attendance percentage and no total-session figure.** `GET /student/attendance-history/`
+  returns records only, so a denominator would be invented.
+- Recent attendance table, five most recent records.
 
-**Attendance history** (`#historyView`) shows the full record for a month chosen with a
-`<input type="month">` picker, with a live record count.
+History view:
 
-Two behaviours worth knowing, both deliberate:
-
-- The dashboard month and the history month are tracked separately. Changing the history
-  filter used to overwrite the dashboard numbers; it no longer does.
-- **Attendance rate is only shown when the server supplies a real denominator.** `app.js`
-  divides records by `total_sessions` and shows `—` if that field is missing, rather than
-  inventing a percentage. The dev server's own `total_sessions` is a **placeholder**
-  (15 for the current month, 20 otherwise) so the card has something to render during a demo.
-  Do not read that number as a real curriculum total; see section 15.
-
-All dates and times are formatted in `Africa/Lagos` by `watParts()` and `watMonthKey()` in
-`app.js`, including the "current month" calculation, so a student checking at 00:30 WAT on the
-1st does not see the previous month.
-
----
+- `GET /student/attendance-history/` (bare list), month filter applied in the browser on
+  `attendance_date`.
+- Columns: session, date, time (WAT, from `scan_time_wat`), status badge.
+- Loading, empty ("No attendance recorded for …") and error states are implemented.
 
 ## 6. QR-code generation and scanning workflow
 
-**Who generates the code.** The mentor's kiosk, which is Engineer B's component. A code is an
-`ATTv1` payload:
+QR **generation** is Engineer B's mentor kiosk. The portal only consumes codes.
 
-```text
-ATTv1.<base64url(payload)>.<base64url(HMAC-SHA256(payload, QR_SECRET))>
+1. Student opens **Scan attendance** and presses **Start camera** (permission required; HTTPS
+   outside `localhost`).
+2. The camera decodes a QR. The portal keeps the decoded text **exactly** as produced and
+   does not parse or pre-validate it.
+3. It requests a **fresh** geolocation fix (`enableHighAccuracy`, `maximumAge: 0`, 15 s
+   timeout), showing "Verifying scan…".
+4. It posts `{qr_payload, latitude, longitude, accuracy}` to `POST /attendance/scan/`.
+5. `201` → confirmation card filled from the returned `attendance` object.
+6. Recoverable failures → readable message plus **Try scanning again** / **Restart camera**.
+7. Only one scan can be in flight; the scanner stops and buttons lock until the response lands.
 
-payload = {"session": "morning", "token": "<random>", "expiresAt": <epoch ms>, "scanDate": "2026-11-18"}
-```
+The mentor kiosk emits JSON such as
+`{"version":1,"token":"signed-token","expires_at":1794908400}`. Tokens live 30 seconds; the
+backend decides that, not the portal.
 
-This repository contains no production QR issuer. `dev/kiosk.html` asks `server.py` for a live
-test code so the scan flow can be exercised without the mentor kiosk.
+## 7. Checkpoint attendance rules and duplicate prevention
 
-**Scan flow, step by step:**
-
-1. Student opens **Scan attendance** and taps *Start camera*.
-2. `html5-qrcode` requests the rear camera and decodes the QR frame by frame.
-3. On the first decode the scanner stops and locks (`scanLocked`), so one physical scan cannot
-   fire several requests.
-4. `app.js` posts `{"qr_payload": "<decoded text>"}` to `/attendance/check-in` with the bearer
-   token. The browser never parses the payload and never decides anything.
-5. The server verifies, in this order: format → signature → known session → not expired →
-   correct `scanDate` → not already recorded.
-6. On success (`201`) the confirmation card shows name, username, session, WAT date and time,
-   and the server's status. The dashboard refreshes.
-7. On a duplicate (`409` with `code: "DUPLICATE_ATTENDANCE"`) the student is told
-   "Already checked in for this session" and the existing record is left untouched.
-
-**Error messages the student can see** (all verified against `server.py`):
-
-| Situation | Response |
-|-----------|----------|
-| Payload is not an `ATTv1` string | `400` "This is not an attendance QR code." |
-| Bad base64/JSON inside the payload | `400` "This QR code is damaged. Ask your mentor to show a fresh one." |
-| Signature does not match | `400` "This QR code was not issued by the attendance system." |
-| Unknown session name | `400` "Unknown attendance session." |
-| Past `expiresAt` | `400` "This QR code has expired. Scan the current one." |
-| `scanDate` is not today in WAT | `400` "This QR code is for a different day." |
-| Same student, same session, same day | `409` "Already checked in for this session." |
-| Missing or expired token | `401` "Your session has expired. Please sign in again." |
-
-The signature check runs first, so a forged code always gets the "not issued by the attendance
-system" message, even if it is also expired. That ordering is intentional.
-
-**Camera requirement.** `getUserMedia` only works on `localhost` or over HTTPS. A plain-HTTP
-LAN address such as `http://192.168.1.42:8000` loads the portal but the scanner cannot open the
-camera. Section 14 covers the workarounds.
-
----
-
-## 7. Daily attendance rules and duplicate prevention
-
-### 7.1 Approved policy (from the project supervisor)
-
-- The system records **one attendance record per student per calendar day**.
-- This is general daily attendance, **not** attendance per subject, class or individual
-  session.
-- A duplicate scan must not create a second record for that student on that day.
-- The backend is authoritative for validation and status.
-- Statuses are **Present**, **Late** and **Absent**.
-- Dates and time calculations use `Africa/Lagos`.
-- QR validation and attendance recording follow the approved daily workflow.
-
-### 7.2 What the code in this repository actually does
-
-**The code is session-based, not daily. This is the main gap between policy and
-implementation, and it is not a documentation wording issue.**
-
-- `server.py` defines three session windows in `SESSIONS`: morning, afternoon, evening.
-- A check-in builds its uniqueness key as `session_id = f"{scanDate}-{session}"`, for example
-  `2026-11-18-morning`.
-- The duplicate check in `check_in()` matches on `(student_id, session_id)`. It therefore
-  prevents the same student scanning the *same session* twice, and deliberately allows a
-  different session later the same day.
-- Verified on 18 November 2026 against a clean database: scanning the morning, afternoon and
-  evening codes with one student produced **three records dated 2026-11-18**, while a second
-  morning scan returned `409 DUPLICATE_ATTENDANCE`.
-
-So today the system enforces "one record per student per session", which is the opposite of the
-approved "one record per student per day".
-
-### 7.3 What has to change to satisfy the policy
-
-| # | Change | File |
-|---|--------|------|
-| 1 | Duplicate key becomes `(student_id, scan_date)`; the second scan of the day returns the duplicate response regardless of session | `server.py` `check_in()` |
-| 2 | `session_id` / `session_name` stop being the record identity; the record is keyed by attendance date | `server.py` row shape, `app.js` table |
-| 3 | One daily cutoff replaces the three session cutoffs, so "Late" has a single meaning | `server.py` `SESSIONS`, needs a policy decision (see below) |
-| 4 | Absence marking: a scheduled end-of-day job writes `absent` for enrolled students with no record that day. No scheduler exists in this repository | new component, Engineer B |
-| 5 | History table column "Session" becomes the attendance date; status labels become Present / Late / Absent | `index.html`, `app.js` |
-| 6 | Contract and UI vocabulary updated from `on_time`/`late` per session to daily `present`/`late`/`absent` | `API_CONTRACT.md`, `app.js` |
-
-**Open question for the supervisor before change 3 is coded:** with one record per day, what
-time makes a student late? The current three cutoffs (09:10, 13:10, 17:15) cannot all survive.
-The most likely reading is that a student is Present if they check in during any session that
-day and Late if their first check-in is after that session's cutoff, with the day's earliest
-record kept. That needs confirming; the README does not assume it.
-
-### 7.4 Duplicate prevention that does exist today
-
-- The server decides, not the browser. `app.js` stops the scanner after one decode but
-  explicitly lets the server answer, because a client guard cannot be trusted.
-- The check runs inside `DB_LOCK` and the insert happens in the same critical section, so two
-  simultaneous requests cannot both create a row in this single-process server.
-- Engineer B must enforce the same rule with a database constraint, not application code alone.
-  In production that is `UNIQUE (student_id, attendance_date)` once the daily policy lands.
-
----
+- The backend decides every rule: session state, QR validity, geofence, duplicate protection,
+  Present versus Late.
+- Duplicate protection is **per student, per campus-local day and per checkpoint**. A repeat
+  scan inside one checkpoint returns `409 duplicate_attendance` with the existing record; the
+  portal shows "You have already completed this checkpoint today." and keeps that record
+  visible. A later checkpoint on the same day is a new, legitimate record.
+- Three records can exist on one day: morning `check_in`, afternoon `check_in`, evening
+  `check_out`. The dashboard lists all three and the history table shows the action per row.
+- The portal implements no rule of its own and never computes a status. See
+  [§15](#15-current-limitations-and-outstanding-work) for the open backend gaps.
 
 ## 8. Attendance statuses
 
-### 8.1 Approved set
+| Backend value | Shown as | Notes |
+|---|---|---|
+| `present` | Present | green badge, canonical |
+| `late` | Late | amber badge |
+| `absent` | Absent | red badge; never counted as attended |
+| `on_time` | On Time | legacy historical rows only, not a current status |
+| anything else | the raw value | shown verbatim, neutral grey badge |
 
-| Status | Meaning |
-|--------|---------|
-| **Present** | Checked in on time for the day |
-| **Late** | Checked in, but after the day's cutoff |
-| **Absent** | No check-in recorded for the day |
+`statusClass()` colours only `late`, `absent` and the on-time family (`on_time` and `present`).
+Anything unrecognised is neutral grey, so an unknown backend status is never mistaken for a
+good one. The dashboard counts only `present`, `late` and legacy `on_time`; absences never
+appear in the attendance count or in "Last check-in".
 
-### 8.2 What the code supports
+Timestamps follow Partner B's contract: `scanned_at` is the canonical instant, serialized as
+explicit UTC (`2026-11-25T12:05:00Z`) and shown verbatim as RECORDED (CANONICAL);
+`scanned_at_local` carries the same instant with the campus offset
+(`2026-11-25T09:05:00-03:00`); `scan_time_local` is the campus wall clock used in the time
+column, with the legacy `scan_time_wat` carrying the same value. The column heading is built
+from `campus_timezone`, so a São Paulo campus reads `TIME (AMERICA/SAO_PAULO)` instead of
+`TIME (WAT)`.
 
-Only two statuses exist: `on_time` and `late`. Both are computed by `server.py` from the server
-clock in WAT, compared against the cutoff of the session named in the QR payload.
+The raw value is always kept in `data-status` on the badge, and the portal never derives
+status from the device clock. If Engineer B renames a value, the badge follows with no code
+change.
 
-| Policy status | Current value in code | Displayed label today |
-|---------------|----------------------|----------------------|
-| Present | `on_time` | "On Time" |
-| Late | `late` | "Late" |
-| Absent | **does not exist** | — |
+**Campus.** The backend sends the campus UUID in `campus` and the readable name in
+`campus_name`. The portal displays `campus_name` everywhere and keeps the UUID only as
+`student.campus_id`, so a student never sees an identifier.
 
-`API_CONTRACT.md` specifies `status` as `on_time` or `late`, and `app.js` treats anything that
-is not `late` as on time. There is no absence record, no absence computation and no way to mark
-a student absent in this repository. Absence can only come from a backend process that knows
-the enrolled roster and runs at end of day.
+**Duplicates.** Engineer B's 409 carries no `attendance` object, so on a duplicate the portal
+re-reads the student's own history and shows today's existing record, clearly marked as
+already completed that checkpoint. If history has nothing for that checkpoint it says so and shows no card; it never
+fabricates a record.
 
-The cutoff itself is inclusive: a scan at exactly the cutoff minute is on time, one minute
-later is late. A late scan is still recorded; lateness never rejects a student.
+`attendance_action` is rendered verbatim in the confirmation card's BACKEND ACTION row and
+kept in `data-action`. The portal does not branch on it: duplicates are detected from HTTP 409
+plus `code: duplicate_attendance`. The authoritative enum is still outstanding from Engineer B
+(see `API_CONTRACT.md`); the mock emits `checked_in` only so the field can be tested.
 
----
+Current contract cutoffs (WAT): morning **09:10**, afternoon **13:10**, evening **17:10**; a
+scan exactly at the cutoff is Late. An earlier instruction said evening 17:15, so the two
+sources disagree — the backend's answer is what the UI displays.
 
 ## 9. Backend API configuration and endpoints
 
-**Base URL.** `CONFIG.API_BASE_URL` in `app.js` is computed at load time:
+Base URL resolution, in order: `window.LEARN2EARN_API_BASE` → the `learn2earn-api-base` meta tag
+in `index.html` → `<page origin>/api/v1` → `https://fellowship.learn2earn.ng/api/v1/` for
+`file://`. One place to change it; no call site hard-codes a host.
 
-```js
-API_BASE_URL: (() => {
-  const { protocol, origin } = window.location;
-  if (protocol === "http:" || protocol === "https:") return `${origin}/api/v1`;
-  return "http://localhost:8000/api/v1";   // opened from file://
-})(),
-```
+| Method | Endpoint | Auth | Purpose |
+|---|---|---|---|
+| POST | `/auth/student/login/` | none | token + student profile |
+| POST | `/auth/logout/` | Token | end the session |
+| GET | `/student/attendance-history/` | Token | bare list of records |
+| POST | `/attendance/scan/` | Token | QR + GPS → attendance record |
 
-So the portal always calls the host that served it. Override it only when the frontend must
-talk to a different host, for example Engineer B's server during integration. No trailing
-slash.
-
-**Endpoints implemented by `server.py`** (all verified with `curl` on 18 November 2026):
-
-| Method | Path | Auth | Purpose | Success | Failures |
-|--------|------|------|---------|---------|----------|
-| POST | `/api/v1/auth/register` | no | create a student | `201` token + student | `409` username taken, `422` validation |
-| POST | `/api/v1/auth/login` | no | sign in | `200` token + student | `401` bad credentials |
-| POST | `/api/v1/auth/logout` | bearer | sign out | `200 {"ok":true}` | — |
-| GET | `/api/v1/students/me/attendance?month=YYYY-MM` | bearer | one month of the caller's records | `200 {records, total_sessions}` | `401` no/expired token, `422` bad month |
-| POST | `/api/v1/attendance/check-in` | bearer | validate a scanned QR and record attendance | `201` record | `400` QR problems, `401`, `409` duplicate |
-| GET | `/api/v1/dev/qr?session=morning\|afternoon\|evening` | no | mint a test QR (**dev only**) | `200` payload + metadata | — |
-| POST | `/api/v1/dev/reset` | no | wipe and reseed data (**dev only**) | `200` | — |
-
-Any other path returns `404 {"detail": "No route for <METHOD> <path>"}`. `GET /api/v1/...`
-routes reject non-matching methods with the same `404` shape rather than `405`.
-
-`API_CONTRACT.md` is the authoritative description of request and response bodies. It is the
-document Engineer B codes against.
-
----
+Error codes handled: `duplicate_attendance` (409), `qr_expired` (403), `invalid_qr` (400),
+`wrong_campus` (403), `session_inactive` (403), `gps_accuracy` (403), `gps_required` (400),
+`401` session expiry, plus safe fallbacks for `403/429/5xx`. Full payloads are in
+[`API_CONTRACT.md`](API_CONTRACT.md).
 
 ## 10. Database structure and persistence
 
-**There is no database in this repository.** `server.py` keeps everything in two Python lists
-and mirrors them to `dev/.data.json` after every write. This exists so the portal can be
-demonstrated before Engineer B's backend is ready.
+The frontend has **no database**. It keeps only the session token and student profile in
+`sessionStorage`.
 
-Stored shapes, exactly as written to `dev/.data.json`:
+Persistence belongs to Engineer B. The local mock mirrors it in `dev/.data.json` (git-ignored)
+with two collections:
 
 ```jsonc
-{
-  "students": [
-    {
-      "id": "uuid4",
-      "full_name": "Demo Student",
-      "username": "demo_student",
-      "password_salt": "hex",          // scrypt salt, 16 bytes
-      "password_hash": "hex",          // scrypt n=16384 r=8 p=1 dklen=64
-      "track": "General",
-      "created_at": "2026-11-18T15:10:17.783Z"
-    }
-  ],
-  "attendance": [
-    {
-      "id": "uuid4",
-      "student_id": "uuid4",           // taken from the token, never from the request body
-      "session_id": "2026-11-18-morning",
-      "session_name": "Morning session",
-      "attended_at": "2026-11-18T08:04:00.000Z",
-      "status": "on_time",             // or "late"
-      "scan_date": "2026-11-18",       // WAT calendar date
-      "month": "2026-11"               // WAT month, used by the history filter
-    }
-  ]
-}
+// students
+{ "id", "full_name", "username", "password_salt", "password_hash",
+  "campus", "is_active", "created_at" }
+
+// attendance
+{ "id", "student_id", "full_name", "username", "session_type",
+  "attendance_date", "scanned_at", "scan_time_wat", "status",
+  "campus", "session_id", "accuracy", "latitude", "longitude", "distance_m" }
 ```
 
-`GET /students/me/attendance` returns a reduced view: `id`, `session_id`, `session_name`,
-`attended_at`, `status`. `student_id`, `scan_date` and `month` stay server-side.
-
-**Limits of this persistence:** single process, no transactions, no indexes, whole-file rewrite
-on each write, no concurrent-writer safety beyond a thread lock, and no backup. Deleting
-`dev/.data.json` resets everything. Passwords are never stored in plaintext.
-
-**What Engineer B needs instead:** a real table per entity, a unique constraint implementing
-the duplicate rule, indexes on `(student_id, attended_at)` and on the month key, and a
-transaction-safe insert so two simultaneous scans cannot both succeed.
-
----
+The mock is a demonstration aid. It has no migrations, no concurrency guarantees beyond a
+process lock, no rate limiting and no production hardening.
 
 ## 11. Installation and setup
 
-Requirements:
-
-- **Python 3.8 or newer** (3.9+ recommended). `server.py` uses only the standard library:
-  `http.server`, `hashlib.scrypt`, `hmac`, `json`, `secrets`, `uuid`.
-- A modern browser with a camera for the scan step.
-- No Node.js, no npm, no build tools, no virtualenv, no `pip install`.
+Requirements: **Python 3.8+**. No third-party packages, no `pip install`, no Node.js, no build
+step.
 
 ```bash
 git clone https://github.com/super7abaga-crypto/Student_Attendance.git
 cd Student_Attendance
-python --version          # confirm 3.8+
 ```
-
-On Windows use `python`; on macOS/Linux use `python3` if `python` is not present.
-
-Optional VS Code extensions are listed in `.vscode/extensions.json` (Python and the Python
-debugger). They are convenience only; nothing breaks without them.
-
----
 
 ## 12. How to run the frontend and backend
 
-The dev server serves both, so one command runs everything.
-
-**Option A — terminal**
-
 ```bash
 python server.py
 ```
 
-Expected output:
+- Portal: <http://127.0.0.1:8000/student/>
+- API base: `http://127.0.0.1:8000/api/v1`
+- Test kiosk: <http://127.0.0.1:8000/dev/kiosk.html>
+- Demo student: `demo_student` / `demo12345` (Lagos Campus)
 
-```text
-  LEARN 2EARN dev server (Python)
-  Portal : http://localhost:8000
-  API    : http://localhost:8000/api/v1
-  Kiosk  : http://localhost:8000/dev/kiosk.html  (live test QR)
-  Demo   : demo_student / demo12345
+In VS Code, **F5** runs the same server (`.vscode/launch.json`) and opens the portal.
+
+To use the portal against a different backend, set the meta tag in `index.html`:
+
+```html
+<meta name="learn2earn-api-base" content="http://127.0.0.1:8000/api/v1">
 ```
 
-**Option B — VS Code**: open the folder, press **F5**, choose
-*"Run portal + dev API (Python)"*. It runs `server.py` and opens the browser at
-`http://localhost:8000`.
-
-Then:
-
-1. Open `http://localhost:8000`.
-2. Sign in with the seeded account `demo_student` / `demo12345`, or create your own.
-3. Open `http://localhost:8000/dev/kiosk.html` in a second window to get a live QR, and point
-   the portal's camera at it.
-
-Stop the server with `Ctrl+C`.
-
-**Frontend without the dev API** (only useful when pointing at Engineer B's backend): serve the
-folder with any static server, for example `python -m http.server 5500`, and set
-`CONFIG.API_BASE_URL` in `app.js` to that backend. The camera still needs `localhost` or HTTPS.
-
-**Port already in use?** `PORT=8080 python server.py` (macOS/Linux) or
-`$env:PORT=8080; python server.py` (PowerShell).
-
----
+The frontend can also be served on its own (`python -m http.server 5500`) with the API base
+pointing at Django; camera and GPS then need `localhost` or HTTPS.
 
 ## 13. Environment variables and configuration
 
-### 13.1 Server (`server.py`)
+`server.py` (development mock):
 
-| Variable | Default | Effect |
-|----------|---------|--------|
-| `PORT` | `8000` | TCP port |
-| `HOST` | `0.0.0.0` | Bind address. `0.0.0.0` lets phones on the LAN connect; use `127.0.0.1` to keep it local |
-| `APP_SECRET` | random per start | HMAC key for access tokens. Random means **every restart invalidates all tokens**; set a fixed value to keep sessions across restarts |
-| `QR_SECRET` | random per start | HMAC key for `ATTv1` QR codes. Random means codes minted before a restart stop verifying after it |
-| `ALLOW_FOREIGN_QR` | off | `1`/`true`/`yes` accepts a well-formed `ATTv1` code signed by another issuer. **Development only** |
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8000` | listening port |
+| `HOST` | `127.0.0.1` | use `0.0.0.0` to reach it from a phone on the same network |
+| `APP_SECRET` | random per start | signs 12-hour session tokens |
+| `QR_SECRET` | random per start | signs mock QR tokens |
+| `CAMPUS_NAME` | `Lagos Campus` | campus label on the student profile |
+| `CAMPUS_LAT` / `CAMPUS_LON` | `6.5244` / `3.3792` | mock geofence centre |
+| `CAMPUS_RADIUS_M` | `300` | mock geofence radius |
+| `MAX_ACCURACY_M` | `100` | reject fixes worse than this |
+| `SESSION_OPEN_MINUTES` | `180` | how long a session accepts scans |
+| `DATA_FILE` | `dev/.data.json` | where the mock persists its data |
+| `MOCK_NOW_WAT` | unset | pins the mock clock, e.g. `09:10`, so cutoffs are testable |
+| `MOCK_ATTENDANCE_ACTION` | `check_in` | mock-only override; each checkpoint otherwise uses its own action (`check_in`, `check_in`, `check_out`) |
 
-Example:
-
-```powershell
-$env:APP_SECRET = "local-dev-only-change-me"
-$env:QR_SECRET  = "local-dev-only-change-me"
-$env:PORT       = "8000"
-python server.py
-```
-
-Neither secret is read from a file, and no `.env` loader exists. Set them in the shell that
-starts the server.
-
-### 13.2 Frontend (`CONFIG` at the top of `app.js`)
-
-| Key | Current value | Effect |
-|-----|---------------|--------|
-| `API_BASE_URL` | derived from `window.location.origin` | Which API the portal calls |
-| `DEMO_MODE` | `false` | **Vestigial.** It only changes the connection note text. No offline or browser-storage demo mode exists |
-| `PERSIST_SESSION` | `false` | `true` keeps the token in `sessionStorage` so a refresh does not sign out. Local demos only |
-| `SESSION_STORAGE_KEY` | `"attendly.session"` | Storage key name, kept from the earlier name of the project. Harmless; change it if the legacy name is confusing |
-
-### 13.3 Testing on a phone over the LAN
-
-1. On the PC run `ipconfig` and note the Wi-Fi adapter's IPv4 address (for example
-   `192.168.1.42`).
-2. On the phone open `http://192.168.1.42:8000`. If nothing loads, allow the port once in an
-   elevated PowerShell:
-
-   ```powershell
-   New-NetFirewallRule -DisplayName "Portal 8000" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow
-   ```
-
-3. The UI will load, but **the camera will refuse** on a plain-HTTP LAN address. Either run an
-   HTTPS tunnel (`cloudflared tunnel --url http://localhost:8000`, then open the `https://…`
-   address on the phone), or on Android add the LAN origin to
-   `chrome://flags/#unsafely-treat-insecure-origin-as-secure` and relaunch Chrome. Neither
-   workaround is suitable for production; production must be HTTPS.
-
----
+`app.js`: `CONFIG.API_BASE_URL`, `SESSION_STORAGE_KEY`, `SESSION_HOURS` (12), `GPS_OPTIONS`,
+`RECENT_ROWS`. No secrets live in the frontend, and none should ever be added.
 
 ## 14. Testing instructions
 
-There is no automated test suite in this repository. Testing is manual and repeatable with the
-steps below; all of them were run on 18 November 2026.
-
-### 14.1 Seeded account
-
-| Username | Password | Notes |
-|----------|----------|-------|
-| `demo_student` | `demo12345` | Created on first start, with up to three sample records from the previous days of the current month |
-
-### 14.2 API checks with curl
+Manual checks against the mock (all of these were run for this revision):
 
 ```bash
-# 1. Sign in and keep the token
-curl -s -X POST http://localhost:8000/api/v1/auth/login \
+# login
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/student/login/ \
   -H "Content-Type: application/json" \
   -d '{"username":"demo_student","password":"demo12345"}'
 
-TOKEN="<access_token from the response>"
+# history (bare list)
+curl -s http://127.0.0.1:8000/api/v1/student/attendance-history/ \
+  -H "Authorization: Token <token>"
 
-# 2. This month's records (200)
-curl -s "http://localhost:8000/api/v1/students/me/attendance?month=2026-11" \
-  -H "Authorization: Bearer $TOKEN"
-
-# 3. No token (401)
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/api/v1/students/me/attendance
-
-# 4. Malformed month (422)
-curl -s -o /dev/null -w "%{http_code}\n" \
-  "http://localhost:8000/api/v1/students/me/attendance?month=nope" \
-  -H "Authorization: Bearer $TOKEN"
-
-# 5. Mint a test QR and scan it
-QR=$(curl -s "http://localhost:8000/api/v1/dev/qr?session=morning" | python3 -c "import sys,json;print(json.load(sys.stdin)['qr_payload'])")
-curl -s -X POST http://localhost:8000/api/v1/attendance/check-in \
-  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d "{\"qr_payload\":\"$QR\"}"                      # 201 first time
-
-# 6. Scan the same code again (409 DUPLICATE_ATTENDANCE)
-curl -s -X POST http://localhost:8000/api/v1/attendance/check-in \
-  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d "{\"qr_payload\":\"$QR\"}"
-
-# 7. Garbage payload (400)
-curl -s -X POST http://localhost:8000/api/v1/attendance/check-in \
-  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d '{"qr_payload":"hello"}'
-
-# 8. Reset the dev data
-curl -s -X POST http://localhost:8000/api/v1/dev/reset
+# a scan, on campus
+curl -s -X POST http://127.0.0.1:8000/api/v1/attendance/scan/ \
+  -H "Content-Type: application/json" -H "Authorization: Token <token>" \
+  -d '{"qr_payload":"<payload from /api/v1/dev/qr>","latitude":6.5244,"longitude":3.3792,"accuracy":15}'
 ```
 
-On PowerShell, `curl` is an alias for `Invoke-WebRequest`; use `curl.exe` for the commands
-above, or run them in Git Bash.
+In the browser: sign in, refresh (session must survive), open history, filter a month with no
+records, then scan the kiosk QR. Test the failure paths by moving the geolocation, denying
+location, and scanning an expired code.
 
-### 14.3 Browser checks
+### Automated suites (in this repository)
 
-- [ ] Register with a mixed-case username containing spaces; the field lowercases and strips
-      spaces as you type.
-- [ ] Register a username that already exists → "That username is already taken."
-- [ ] Register with a 7-character password → "Your password must contain at least 8 characters."
-- [ ] Register with mismatched confirmation → "The passwords do not match."
-- [ ] Sign in with a wrong password → "Incorrect username or password."
-- [ ] Dashboard stat cards match the records returned by the API for the current month.
-- [ ] Change the history month; the dashboard numbers must not change.
-- [ ] Start the camera on `localhost`, scan the kiosk code → confirmation card with the
-      server's status, then the dashboard refreshes.
-- [ ] Scan the same code twice → "Already checked in for this session."
-- [ ] Scan an old code (wait past 2 minutes) → "This QR code has expired. Scan the current one."
-- [ ] Restart the server without `QR_SECRET` set, then scan a code from before the restart →
-      "This QR code was not issued by the attendance system."
-- [ ] Resize to 390px width: sidebar collapses to the menu button, tables stay readable.
+Both suites are self-contained: they start their own mock on a free port with fixed dev
+secrets and a throwaway data file, so they never touch `dev/.data.json` and never need a
+server running first.
 
-### 14.4 Testing with Engineer B's QR codes
+```bash
+# API contract suite: standard library only, no install
+python3 tests/api-test.py
 
-Codes from Engineer B's kiosk are signed with their secret, which this dev server does not
-hold, so they are rejected by default with "This QR code was not issued by the attendance
-system." That rejection is correct behaviour, not a bug. To walk through the scan flow with one
-of their codes locally:
-
-```powershell
-$env:ALLOW_FOREIGN_QR = "1"
-python server.py
+# Browser suite: installs playwright-core, drives the real Chrome/Chromium
+cd tests
+npm install
+npm test
 ```
 
-The server then accepts a well-formed `ATTv1` payload from another issuer, prints
-`[dev] accepted a QR payload signed by another issuer (ALLOW_FOREIGN_QR=1)`, and maps
-`session_type`, `scan_date` and ISO `expires_at` onto its own session table. Malformed,
-expired and wrong-day codes are still refused. Never enable this for real attendance.
+`tests/api-test.py` runs 74 checks: login success and failure, Token scheme (Bearer rejected),
+bare-list history with contract fields, logout and idempotent logout, forged/expired token,
+valid scan with every documented field including `attendance_action`, duplicate 409 keeping the
+original record, expired QR, malformed QR, wrong campus, poor accuracy, missing GPS, inactive
+session, static assets under `/student/`, a pinned-clock scenario for **09:05 present**,
+**09:10 present**, **09:11 late**, and a three-checkpoint day (morning, afternoon and evening
+on one campus-local date, each with its own duplicate).
 
----
+`tests/ui-test.js` runs 104 checks in Chromium with a fake camera and mocked geolocation: login
+screen and enrollment notice, invalid login, login, session restore after refresh, dashboard
+stats, history rendering and month filtering including the empty month, successful scan into
+the confirmation card, duplicate keeping the original record, expired QR, malformed QR, wrong
+campus, GPS denied, scan locking and retry, logout and 401 handling, three viewports with no
+horizontal overflow, assets under `/student/`, the dev kiosk rendering and refreshing, and
+backend status vocabulary, attendance counts that exclude absences, checkpoint-scoped
+duplicate copy, and campus-local date handling for Lagos, Sao Paulo, New York and Tokyo.
+Screenshots land in `tests/screenshots/`; committed copies are in
+[`docs/screenshots/`](docs/screenshots).
+
+Two further suites cover real integration and layout:
+
+```bash
+# End-to-end against Engineer B's Django on a disposable database (PostgreSQL or SQLite).
+# The script refuses to run unless the database name contains e2e, test or sandbox.
+DJANGO_DIR=../backend DATABASE_URL=postgresql://.../e2e_portal \
+  node tests/e2e-django.js          # 27 checks
+
+# Responsive audit: desktop 1440, tablet 834, phone 390 against any running portal.
+PORTAL_URL=http://127.0.0.1:8020/index.html API_BASE=http://127.0.0.1:8010/api/v1 \
+  PORTAL_USER=... PORTAL_PASS=... node tests/responsive-test.js   # 38 checks
+```
+
+Results recorded for this revision: `api-test.py` 74 passed; `ui-test.js` 104 passed (run twice);
+`e2e-django.js` 27 passed against Django with a **non-Lagos** campus (`America/Sao_Paulo`);
+`responsive-test.js` 38 passed.
+
+**These are mock tests.** They prove the frontend honours the documented contract and handles
+each response shape; they do not prove behaviour against Engineer B's backend. See section 15
+for the blocked live tests.
+
+The suites accept `BASE_URL` and `CHROME_PATH` environment variables, so the same browser suite
+can be pointed at a deployed student portal once the backend is reachable.
 
 ## 15. Current limitations and outstanding work
 
-**Policy not yet implemented**
+**Attendance model (settled).** The CEO approved the three-checkpoint model on 23 November
+2026: one record per student, campus-local day and checkpoint; morning and afternoon are
+`check_in`, evening is `check_out`; a repeat scan inside one checkpoint returns 409 with the
+existing record; one absence per checkpoint, created only after that checkpoint's own close;
+lateness starts at 09:11 and 13:11. The portal follows this model and does not enforce it.
 
-1. **Daily attendance is not implemented.** Records are per session; one student can hold three
-   records for one day. See section 7.
-2. **Absent does not exist.** No absence record, no absence computation, no end-of-day process.
-3. **Status names differ from the policy.** The code uses `on_time` / `late`; the policy says
-   Present / Late / Absent. One daily cutoff has to be agreed first.
-4. **One daily cutoff is undecided**, which blocks items 1–3.
+Blocked on Engineer B:
 
-**Backend and data**
+- **`campus_timezone` / `campus_local_date` are not exposed.** The student login payload
+  carries only `campus` (UUID) and `campus_name`. Until an IANA zone or a campus-local date is
+  added, the portal cannot say which checkpoints are still open or closed; it shows the
+  campus-local date returned by the most recent scan, and otherwise labels the panel as the
+  most recent recorded day. It never assumes `Africa/Lagos`.
+- **Timestamps are labelled WAT.** The backend field is `scan_time_wat`, computed with the
+  server's `TIME_ZONE`, so the history table keeps the `TIME (WAT)` heading. A zone-neutral
+  value (for example `scanned_at` plus `campus_timezone`) would let the portal render
+  campus-local times.
+- **No deployed API.** `https://fellowship.learn2earn.ng/api/v1/` still answers every path with
+  the marketing page, so the portal cannot be pointed at production yet.
+- **No CI on the pull requests.** Nothing runs these suites automatically.
 
-5. **No production database.** `dev/.data.json` is a single-process JSON mirror.
-6. **`total_sessions` is a placeholder** (15 for the current month, 20 otherwise). The
-   attendance-rate card is therefore illustrative, not a real percentage.
-7. **Logout does not revoke tokens.** They stay valid until the 2-hour expiry.
-8. **Secrets are random per start** unless `APP_SECRET` / `QR_SECRET` are set, so a restart
-   invalidates every session and every outstanding QR code.
-9. **No rate limiting, no lockout, no audit log, no password reset, no email verification.**
-10. **CORS is `*`** on every response. Fine for a dev stand-in, wrong for production.
+Not verified:
 
-**Frontend**
+- **Real-device testing.** No phone was available to this environment and no HTTPS deployment
+  exists, so camera permission, GPS permission and a real QR scan were not exercised on
+  hardware. The 390x844 and 834x1112 runs are browser device emulation, not a physical device.
 
-11. **Session is lost on refresh** because `PERSIST_SESSION` is `false` by design.
-12. **Camera needs `localhost` or HTTPS**; a plain LAN address cannot scan.
-13. **The scanner library falls back to a CDN** if `vendor/html5-qrcode.min.js` is missing, so a
-    blocked network shows "The QR scanner library did not load."
-14. **Google Fonts needs internet on first load**; the page falls back to system fonts offline.
-15. **Registration is open.** If the institution needs an invitation code, matriculation number
-    or mentor approval, that belongs in the contract first.
-16. **No mentor or admin view**: no roster, no manual correction, no export.
+Known frontend limitations:
 
-**Dev-only code that must not ship**
+- Logout cannot revoke a Django token; the 12-hour server-side expiry is the real control.
+- Camera and geolocation require HTTPS (or `localhost`); a plain-HTTP LAN address will fail.
+- The kiosk test page uses the vendored `vendor/qrcode.min.js`, so it draws a code with no
+  internet access.
 
-17. `server.py`, `dev/kiosk.html`, `dev/.data.json`, `POST /dev/reset`, `GET /dev/qr` and
-    `ALLOW_FOREIGN_QR` are development aids. Delete or exclude them before any real deployment.
+## 16. Integration responsibilities
 
----
-
-## 16. Integration responsibilities (Engineer A ↔ Engineer B)
-
-**Engineer A — this module (frontend + local dev server)**
-
-- Normalises username input and validates forms for a usable interface.
-- Displays the authenticated student and their records.
-- Opens the camera, decodes the QR and posts the raw payload.
-- Displays the server's verdict, including duplicates, without reinterpretation.
-- Formats timestamps in `Africa/Lagos` for display only.
-- Maintains `API_CONTRACT.md` and this README.
-
-**Engineer B — backend and system owner**
-
-- Owns the database, its schema, migrations and backups.
-- Repeats username normalisation and enforces uniqueness.
-- Hashes passwords and verifies credentials; issues and validates sessions or tokens.
-- Derives the student from the authenticated principal, never from the request body.
-- Signs QR payloads and verifies signature, expiry, session state and eligibility.
-- Computes status from server time in `Africa/Lagos`.
-- Enforces the duplicate rule with a database constraint and a transaction-safe insert.
-- Implements the daily-attendance policy and absence marking once the cutoff is agreed.
-- Returns records only for the authenticated student.
-- Owns rate limiting, CORS allow-listing, audit logging and HTTPS.
-- Owns the production QR issuing kiosk.
-
-**Shared, must be agreed in writing before either side changes behaviour:** API base URL,
-endpoint paths and payload shapes, status vocabulary, the daily cutoff time, whether
-registration is open, and the token/session strategy. All of it lives in `API_CONTRACT.md`.
+| Engineer A (this repo) | Engineer B (Django) |
+|---|---|
+| Login screen, dashboard, scanner UI, confirmation card, history | Authentication, token issuance and expiry, account and campus assignment |
+| Sends the exact QR text and a fresh GPS fix | QR issuance and validation, 30-second expiry |
+| Displays status, session, date and time from the response | Session state, cutoffs, On Time / Late, duplicate protection |
+| Month filtering, loading/empty/error states | Geofence calculation, attendance storage, reporting |
+| Static bundle ready for `/student/` | Serving it at `/student/`, CORS if not same-origin |
 
 ---
 
-## Appendix: recent changes
+## Appendix — documentation state
 
-- Backend moved from Node.js to Python (`server.py`, standard library only); `package.json`,
-  `node_modules` and `dev/mock-server.js` are gone.
-- One real bug fixed during that port: a request whose body was never read (early `401`/`404`
-  returns) left bytes in the socket and corrupted the next keep-alive request. The server now
-  drains the body on every request.
-- Current month and all date formatting use `Africa/Lagos` instead of UTC.
-- History filter no longer overwrites the dashboard figures.
-- `401` clears the session and returns the student to sign-in.
-- Duplicate scans are answered by the server instead of a client-side guard.
-- Double-submit protection on both auth forms.
-- Attendance rate is clamped to 100% and shows `—` when the denominator is missing.
-- Learn2Earn rebrand: official logo, live-portal design tokens (primary `#0950c3`, accent
-  `#f97415`), gradient sidebar, two-panel dashboard.
+| Area | State |
+|---|---|
+| Login-only enrollment | Implemented |
+| Token auth (`Token`, 12 h, sessionStorage) | Implemented |
+| Session restore, logout, 401 handling | Implemented |
+| QR scan with exact payload + GPS | Implemented |
+| Confirmation card from backend fields | Implemented |
+| Duplicate and error handling | Implemented |
+| Attendance history + month filter | Implemented |
+| `/student/` relative paths | Implemented, verified locally |
+| Live Django integration | **Blocked** — API not reachable |
+| Three-checkpoint attendance (morning check-in, afternoon check-in, evening checkout) | **Implemented and approved** |
 
-## License
+## Change log
 
-See `LICENSE`.
+- **19 Nov 2026** — Django integration: login-only enrollment, `Token` auth with 12-hour
+  sessionStorage sessions, `/auth/student/login/`, `/auth/logout/`,
+  `/student/attendance-history/`, `/attendance/scan/` with GPS, backend-driven statuses and
+  error codes, month filtering, `/student/` hosting support, `HOSTING.md`, contract rewrite,
+  and `server.py` repurposed as a mock of the Django contract.
+- **19 Nov 2026 (review round 1)** — dev kiosk repaired (stray script before `<!DOCTYPE>`
+  removed, `payload` field aligned with `server.py`, WAT clock fixed, QR library vendored so
+  the code draws offline), `attendance_action` surfaced, status vocabulary aligned to
+  `present`/`late`/`absent`, and reproducible suites added: `tests/api-test.py` (48 checks)
+  and `tests/ui-test.js` (68 checks) with `tests/README.md` and npm scripts. `HOSTING.md`
+  rewritten around `{% static %}` so assets resolve from `/student/`.
