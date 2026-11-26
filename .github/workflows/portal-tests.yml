@@ -6,8 +6,11 @@ name: Portal tests
 on:
   pull_request:
     branches: [main]
+  # The working branch is listed so the workflow also runs before the pull request
+  # is merged; pull_request alone does not produce a run on a branch whose workflow
+  # file is not yet on the default branch.
   push:
-    branches: [main]
+    branches: [main, feat/django-student-integration]
 
 permissions:
   contents: read
