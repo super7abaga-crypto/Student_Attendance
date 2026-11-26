@@ -7,7 +7,6 @@ the route stops serving the vendored assets.
 """
 
 import hashlib
-import json
 import sys
 from pathlib import Path
 
