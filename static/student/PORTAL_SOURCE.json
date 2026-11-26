@@ -1,11 +1,11 @@
 {
   "source_repository": "super7abaga-crypto/Student_Attendance",
   "source_branch": "feat/django-student-integration",
-  "source_commit": "f5dcf7372585c2a144f16ee92339b37b1724f578",
+  "source_commit": "2e61a297cb465467a8ae5ae8e285543c0dce36b0",
   "adapter": "tools/sync_student_portal.py (static paths and CDN fallback only)",
   "files": {
     "app.js": "aea15458d8c0e2b9aca23111a1f7c8d0e92772eac7fcc3a5d46045dfea198c9f",
     "styles.css": "c833b1f7da6d6157e4bf5d99740d1a20cb7c7bac267a4a92d98f5769bc85a875",
-    "index.html": "c3d3f94b272dbe021e18a8bf6bc3ce53a6a70748ba3103c1fb539f71494dde7d"
+    "index.html": "2c6f7caaaa1264be4002a9171a3b0683fd6e726fca21fbfef51c703e13a79a93"
   }
 }
