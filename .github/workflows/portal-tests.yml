@@ -21,10 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Overlay Partner A portal source for portal-only tests
-        run: |
-          git fetch origin feat/django-student-integration
-          git checkout FETCH_HEAD -- app.js index.html styles.css server.py dev/kiosk.html API_CONTRACT.md README.md
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -42,10 +38,6 @@ jobs:
       MOCK_NOW_WAT: "09:05"
     steps:
       - uses: actions/checkout@v4
-      - name: Overlay Partner A portal source for portal-only tests
-        run: |
-          git fetch origin feat/django-student-integration
-          git checkout FETCH_HEAD -- app.js index.html styles.css server.py dev/kiosk.html API_CONTRACT.md README.md
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -108,16 +100,15 @@ jobs:
       # makes the commit reachable, and the resolved SHA is asserted below, so a
       # backend that moves cannot silently change what this suite tested.
       BACKEND_REF: feat/engineer-b-attendance
-      BACKEND_SHA: afb47c657d44e5bebc32b6330224a6a33af3e81f
+      # Pinned to the head that restored Partner A's portal and moved the mentor console:
+      # it carries the complete Django backend this suite exercises. Bump it whenever
+      # backend code changes, and keep the resolved-SHA assertion below.
+      BACKEND_SHA: 2a451fd1e9e419f114d4a613b5c75f244e2b2190
       ATTENDANCE_SECRET: ci-only-attendance-signing-secret-0123456789
       DJANGO_SECRET_KEY: ci-only-django-secret-key-0123456789abcdef
       CORS_ALLOWED_ORIGINS: http://127.0.0.1:8020
     steps:
       - uses: actions/checkout@v4
-      - name: Overlay Partner A portal source for portal-only tests
-        run: |
-          git fetch origin feat/django-student-integration
-          git checkout FETCH_HEAD -- app.js index.html styles.css server.py dev/kiosk.html API_CONTRACT.md README.md
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
