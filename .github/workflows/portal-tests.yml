@@ -6,11 +6,12 @@ name: Portal tests
 on:
   pull_request:
     branches: [main]
-  # main for pushes after merge. The recovery branch is listed because pull_request
-  # does not start a run while the workflow file is not yet on the default branch;
-  # drop it from this list once the recovery pull request has landed.
+  # main only. Pull requests are covered above; this exists so the suites also run
+  # against the merge result itself. The ci/restore-portal-tests entry that PR #8
+  # needed while its workflow was not yet on the default branch was removed after
+  # that recovery landed in 8d332a8.
   push:
-    branches: [main, ci/restore-portal-tests]
+    branches: [main]
 
 permissions:
   contents: read
