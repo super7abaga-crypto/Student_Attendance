@@ -6,11 +6,9 @@ name: Portal tests
 on:
   pull_request:
     branches: [main]
-  # main for pushes after merge. The recovery branch is listed because pull_request
-  # does not start a run while the workflow file is not yet on the default branch;
-  # drop it from this list once the recovery pull request has landed.
+  # Run after merges to main; pull requests into main are covered above.
   push:
-    branches: [main, ci/restore-portal-tests]
+    branches: [main]
 
 permissions:
   contents: read
@@ -103,7 +101,7 @@ jobs:
       # Pinned to the merge of PR #4, the first main revision that carries the Django
       # backend. The branch is only transport; the assertion below fails the job if the
       # resolved commit differs. Bump this pin whenever backend code changes on main.
-      BACKEND_SHA: 8f146df38dcd5f236aaae7d0fe6695ade98514af
+      BACKEND_SHA: 0000000000000000000000000000000000000000
       ATTENDANCE_SECRET: ci-only-attendance-signing-secret-0123456789
       DJANGO_SECRET_KEY: ci-only-django-secret-key-0123456789abcdef
       CORS_ALLOWED_ORIGINS: http://127.0.0.1:8020
