@@ -1,0 +1,209 @@
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+const ROOT = __dirname;
+const DATA_DIR = path.join(ROOT, 'data');
+const DB_FILE = path.join(DATA_DIR, 'attendance.json');
+const ARCHIVE_DIR = path.join(DATA_DIR, 'archives');
+const PORT = Number(process.env.PORT || 3000);
+const SECRET = process.env.ATTENDANCE_SECRET || 'local-development-secret-change-before-deploy';
+const TZ = 'Africa/Lagos';
+const SESSIONS = { morning: { label: 'Morning', start: '09:00' }, afternoon: { label: 'Afternoon', start: '13:00' }, evening: { label: 'Evening', start: '17:00' } };
+const PROFILE_FILE = path.join(DATA_DIR, 'mentor_profile.json');
+const AUTH_COOKIE = 'l2e_mentor';
+const PY_QR = "import sys,json,base64\ntry:\n import qrcode\nexcept Exception:\n sys.exit(3)\ndata=json.loads(base64.urlsafe_b64decode(sys.stdin.buffer.read()+b'==='))\nqr=qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8, border=2)\nqr.add_data(json.dumps(data,separators=(',',':')))\nqr.make(fit=True)\nimg=qr.make_image(fill_color='black',back_color='white')\nimg.save(sys.stdout.buffer,format='PNG')";
+fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+
+function loadDb() {
+  if (!fs.existsSync(DB_FILE)) {
+    const initial = { students: [], attendance_logs: [], archived_months: [], last_reset_month: monthKey() };
+    saveDb(initial); return initial;
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    data.students ||= []; data.attendance_logs ||= []; data.archived_months ||= [];
+    if (!data.last_reset_month) data.last_reset_month = monthKey();
+    return data;
+  } catch { throw new Error('Could not read attendance storage. Restore data/attendance.json from backup before continuing.'); }
+}
+function saveDb(data) { const tmp = `${DB_FILE}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(data, null, 2)); fs.renameSync(tmp, DB_FILE); }
+function getProfile() {
+  if (!fs.existsSync(PROFILE_FILE)) return null;
+  return JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
+}
+function cookie(req, name) { return String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(`${name}=`))?.slice(name.length + 1) || ''; }
+function authorized(req) {
+  const profile = getProfile(); if (!profile) return false;
+  const parts = cookie(req, AUTH_COOKIE).split('.'); if (parts.length !== 2) return false;
+  const [sessionId, signature] = parts;
+  if (sessionId !== profile.session_id) return false;
+  const expected = sign(`mentor:${sessionId}`);
+  const a = Buffer.from(signature); const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function authCookie(sessionId, secure) { return `${AUTH_COOKIE}=${sessionId}.${sign(`mentor:${sessionId}`)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400${secure ? '; Secure' : ''}`; }
+function monthKey(date = new Date()) { return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit' }).format(date); }
+function localParts(date) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(date).map(x => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}:${p.second}`, hour: Number(p.hour), minute: Number(p.minute), month: `${p.year}-${p.month}` };
+}
+function resetMonth(db, target = monthKey()) {
+  if (db.last_reset_month === target) return false;
+  const oldMonth = db.last_reset_month;
+  const logs = db.attendance_logs.filter(x => x.scan_date.startsWith(oldMonth));
+  if (logs.length) {
+    const archive = { month: oldMonth, archived_at: new Date().toISOString(), students: db.students, attendance_logs: logs };
+    fs.writeFileSync(path.join(ARCHIVE_DIR, `${oldMonth}.json`), JSON.stringify(archive, null, 2));
+    db.archived_months.push({ month: oldMonth, archived_at: archive.archived_at, log_count: logs.length });
+  }
+  db.attendance_logs = db.attendance_logs.filter(x => !x.scan_date.startsWith(oldMonth));
+  db.last_reset_month = target; saveDb(db); return true;
+}
+function b64(value) { return Buffer.from(value).toString('base64url'); }
+function sign(value) { return crypto.createHmac('sha256', SECRET).update(value).digest('base64url'); }
+function makeToken(session, now = Date.now()) {
+  if (!SESSIONS[session]) throw new Error('Choose a valid session.');
+  const exp = Math.floor(now / 1000) + 30;
+  const payload = b64(JSON.stringify({ session, exp, nonce: crypto.randomBytes(8).toString('hex') }));
+  return `${payload}.${sign(payload)}`;
+}
+function readToken(token, now = Date.now()) {
+  if (typeof token !== 'string') throw new Error('QR token is missing.');
+  const [payload, signature, extra] = token.split('.');
+  if (!payload || !signature || extra || !crypto.timingSafeEqual(Buffer.from(signature.padEnd(43, '=')), Buffer.from(sign(payload).padEnd(43, '=')))) throw new Error('This QR code is invalid. Scan the live mentor display.');
+  let value; try { value = JSON.parse(Buffer.from(payload, 'base64url').toString()); } catch { throw new Error('This QR code is invalid.'); }
+  if (!SESSIONS[value.session] || !Number.isInteger(value.exp) || value.exp < Math.floor(now / 1000)) throw new Error('This QR code has expired. Scan the refreshed code.');
+  return value.session;
+}
+function cutoffMinutes(session) { const [h, m] = SESSIONS[session].start.split(':').map(Number); return h * 60 + m + 10; }
+function isAbsent(date, session, now = new Date()) {
+  const today = localParts(now); if (date > today.date) return false;
+  if (date < today.date) return true;
+  return today.hour * 60 + today.minute >= cutoffMinutes(session);
+}
+function json(res, status, body) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(body)); }
+function body(req) { return new Promise((resolve, reject) => { let raw = ''; req.on('data', c => { raw += c; if (raw.length > 100_000) reject(new Error('Request is too large.')); }); req.on('end', () => { try { resolve(JSON.parse(raw || '{}')); } catch { reject(new Error('Send valid JSON.')); } }); req.on('error', reject); }); }
+function escapeCsv(value) { const s = String(value ?? ''); return `"${s.replaceAll('"', '""')}"`; }
+function sendFile(res, file) {
+  const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
+  fs.readFile(file, (err, data) => { if (err) return json(res, 404, { error: 'Not found.' }); res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' }); res.end(data); });
+}
+const app = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, timezone: TZ });
+    if (url.pathname.startsWith('/api/') && !['/api/auth/status','/api/auth/setup','/api/auth/login','/api/auth/logout','/api/health','/api/scan','/api/qr-image'].includes(url.pathname) && !authorized(req)) return json(res, 401, { error: 'Mentor sign-in required.' });
+    if (req.method === 'GET' && url.pathname === '/api/auth/status') {
+      const profile = getProfile();
+      return json(res, 200, { setup_required: !profile, authenticated: authorized(req), display_name: authorized(req) ? profile.display_name : '' });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/auth/setup') {
+      if (getProfile()) return json(res, 409, { error: 'Mentor account has already been set up.' });
+      const input = await body(req); const display_name = String(input.display_name || '').trim(); const password = String(input.password || '');
+      if (display_name.length < 2 || display_name.length > 60 || password.length < 8) return json(res, 400, { error: 'Enter a display name and a password with at least 8 characters.' });
+      const salt = crypto.randomBytes(16).toString('hex'); const password_hash = crypto.scryptSync(password, salt, 64).toString('hex'); const session_id = crypto.randomBytes(24).toString('base64url');
+      fs.writeFileSync(PROFILE_FILE, JSON.stringify({ display_name, salt, password_hash, session_id, created_at: new Date().toISOString() }, null, 2));
+      res.setHeader('Set-Cookie', authCookie(session_id, Boolean(req.socket.encrypted)));
+      return json(res, 201, { authenticated: true, display_name });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/auth/login') {
+      const profile = getProfile(); if (!profile) return json(res, 409, { error: 'Set up the first mentor account.' });
+      const input = await body(req); const candidate = crypto.scryptSync(String(input.password || ''), profile.salt, 64); const stored = Buffer.from(profile.password_hash, 'hex');
+      if (candidate.length !== stored.length || !crypto.timingSafeEqual(candidate, stored)) return json(res, 401, { error: 'Password is incorrect.' });
+      const session_id = crypto.randomBytes(24).toString('base64url'); profile.session_id = session_id; fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
+      res.setHeader('Set-Cookie', authCookie(session_id, Boolean(req.socket.encrypted)));
+      return json(res, 200, { authenticated: true, display_name: profile.display_name });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
+      const profile = getProfile(); if (profile && authorized(req)) { profile.session_id = crypto.randomBytes(24).toString('base64url'); fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2)); }
+      res.setHeader('Set-Cookie', `${AUTH_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${req.socket.encrypted ? '; Secure' : ''}`);
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/profile') {
+      if (!authorized(req)) return json(res, 401, { error: 'Mentor sign-in required.' });
+      const profile = getProfile(); return json(res, 200, { display_name: profile.display_name });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/profile') {
+      if (!authorized(req)) return json(res, 401, { error: 'Mentor sign-in required.' });
+      const input = await body(req); const profile = getProfile(); const display_name = String(input.display_name || '').trim(); const password = String(input.password || '');
+      if (display_name.length < 2 || display_name.length > 60) return json(res, 400, { error: 'Display name must be 2 to 60 characters.' });
+      profile.display_name = display_name;
+      if (password) { if (password.length < 8) return json(res, 400, { error: 'Password must have at least 8 characters.' }); profile.salt = crypto.randomBytes(16).toString('hex'); profile.password_hash = crypto.scryptSync(password, profile.salt, 64).toString('hex'); }
+      fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2)); return json(res, 200, { display_name });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/qr-image') {
+      const token = url.searchParams.get('token');
+      if (!authorized(req)) return json(res, 401, { error: 'Mentor sign-in required.' });
+      try { readToken(token); } catch (e) { return json(res, 400, { error: e.message }); }
+      const payload = Buffer.from(JSON.stringify({ token }), 'utf8').toString('base64url');
+      const child = require('node:child_process').spawn('python', ['-c', PY_QR], { stdio: ['pipe', 'pipe', 'ignore'] });
+      const chunks = [];
+      child.stdout.on('data', x => chunks.push(x)); child.on('error', () => json(res, 503, { error: 'Local QR image generation is unavailable. Install Python qrcode and Pillow.' }));
+      child.on('close', code => { if (code !== 0) return json(res, 503, { error: 'Install Python qrcode and Pillow to enable the QR kiosk.' }); const png = Buffer.concat(chunks); res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(png); });
+      child.stdin.end(payload); return;
+    }
+    if (req.method === 'GET' && url.pathname.startsWith('/api/archives/')) {
+      const name = path.basename(decodeURIComponent(url.pathname.slice('/api/archives/'.length)));
+      if (!/^[0-9]{4}-[0-9]{2}\.(json|csv)$/.test(name)) return json(res, 400, { error: 'Invalid archive name.' });
+      const target = path.join(ARCHIVE_DIR, name);
+      if (!fs.existsSync(target)) return json(res, 404, { error: 'Archive not found.' });
+      res.writeHead(200, { 'Content-Type': name.endsWith('.csv') ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"`, 'X-Content-Type-Options': 'nosniff' });
+      return fs.createReadStream(target).pipe(res);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/qr') {
+      const input = await body(req); const session = input.session;
+      return json(res, 200, { session, session_label: SESSIONS[session]?.label, qr_token: makeToken(session), expires_in_seconds: 30, server_time: new Date().toISOString() });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/scan') {
+      const input = await body(req); const session = readToken(input.qr_token); const username = String(input.username || '').trim().toLowerCase().replace(/\s+/g, '');
+      if (!/^[a-z0-9._-]{2,40}$/.test(username)) return json(res, 400, { error: 'Enter a valid attendance username.' });
+      const db = loadDb(); resetMonth(db);
+      const student = db.students.find(s => s.username.toLowerCase() === username);
+      if (!student) return json(res, 404, { error: 'Username not found. Ask a mentor to add your student profile.' });
+      const now = new Date(); const local = localParts(now);
+      const prior = db.attendance_logs.find(a => a.username === username && a.scan_date === local.date && a.session_type === session);
+      if (prior) return json(res, 409, { error: 'Already checked in for this session.', attendance: prior });
+      const minute = local.hour * 60 + local.minute; const status = minute < cutoffMinutes(session) ? 'On Time' : 'Late';
+      const log = { id: crypto.randomUUID(), full_name: student.full_name, username, track: student.track || '', session_type: session, session_label: SESSIONS[session].label, scan_date: local.date, scan_time_wat: local.time, timestamp: now.toISOString(), status };
+      db.attendance_logs.push(log); saveDb(db);
+      return json(res, 201, { status, timestamp: log.timestamp, timestamp_wat: `${local.date} ${local.time}`, session, attendance: log });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/dashboard') {
+      const db = loadDb(); resetMonth(db); const now = new Date(); const today = localParts(now).date;
+      const requestedDate = url.searchParams.get('date') || today; const track = url.searchParams.get('track') || ''; const status = url.searchParams.get('status') || '';
+      const dateLogs = db.attendance_logs.filter(a => a.scan_date === requestedDate);
+      const filtered = dateLogs.filter(a => (!track || a.track === track) && (!status || a.status === status)).sort((a,b) => b.timestamp.localeCompare(a.timestamp));
+      const expected = db.students.length * Object.keys(SESSIONS).length;
+      const filteredDate = dateLogs.filter(a => (!track || a.track === track) && (!status || a.status === status));
+      const records = filteredDate.map(a => ({ ...a, attendance_status: a.status }));
+      for (const student of db.students) for (const [key, session] of Object.entries(SESSIONS)) {
+        const found = db.attendance_logs.find(a => a.username === student.username && a.scan_date === requestedDate && a.session_type === key);
+        if (!found && isAbsent(requestedDate, key, now) && (!track || student.track === track) && (!status || status === 'Absent')) records.push({ full_name: student.full_name, username: student.username, track: student.track || '', session_type: key, session_label: session.label, scan_date: requestedDate, scan_time_wat: '—', status: 'Absent', attendance_status: 'Absent' });
+      }
+      const allStudents = db.students;
+      return json(res, 200, { date: requestedDate, today, timezone: TZ, sessions: SESSIONS, students: allStudents, tracks: [...new Set(allStudents.map(s => s.track).filter(Boolean))].sort(), logs: filtered, rows: records.sort((a,b) => (a.scan_time_wat || '').localeCompare(b.scan_time_wat || '')), recent: [...db.attendance_logs].sort((a,b) => b.timestamp.localeCompare(a.timestamp)).slice(0,8), summary: { students: db.students.length, checked_in: dateLogs.length, on_time: dateLogs.filter(a => a.status === 'On Time').length, late: dateLogs.filter(a => a.status === 'Late').length, absent: Math.max(0, expected - dateLogs.length) }, archives: db.archived_months });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/students') {
+      const input = await body(req); const username = String(input.username || '').trim().toLowerCase().replace(/\s+/g, ''); const full_name = String(input.full_name || '').trim(); const track = String(input.track || '').trim();
+      if (!/^[a-z0-9._-]{2,40}$/.test(username) || full_name.length < 2 || full_name.length > 100) return json(res, 400, { error: 'Enter a full name and a valid username (2–40 letters, numbers, dot, underscore or hyphen).' });
+      const db = loadDb(); if (db.students.some(s => s.username === username)) return json(res, 409, { error: 'That username already exists.' });
+      db.students.push({ id: crypto.randomUUID(), full_name, username, track, created_at: new Date().toISOString() }); saveDb(db); return json(res, 201, { student: { full_name, username, track } });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/reset') {
+      const db = loadDb(); const now = new Date(); const month = monthKey(now); const logs = db.attendance_logs.filter(a => a.scan_date.startsWith(month));
+      const csv = ['full_name,username,track,session_type,scan_date,scan_time_wat,status', ...logs.map(a => [a.full_name,a.username,a.track,a.session_type,a.scan_date,a.scan_time_wat,a.status].map(escapeCsv).join(','))].join('\r\n');
+      const filename = `${month}-attendance.csv`; fs.writeFileSync(path.join(ARCHIVE_DIR, filename), csv, 'utf8');
+      db.attendance_logs = db.attendance_logs.filter(a => !a.scan_date.startsWith(month)); db.last_reset_month = month; db.archived_months = db.archived_months.filter(a => a.month !== month); db.archived_months.push({ month, archived_at: now.toISOString(), log_count: logs.length, export_file: filename }); saveDb(db);
+      return json(res, 200, { month, log_count: logs.length, csv, filename });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/archives') {
+      const db = loadDb(); const files = fs.readdirSync(ARCHIVE_DIR).map(name => ({ name, type: name.endsWith('.csv') ? 'CSV' : 'JSON' })); return json(res, 200, { archives: files, months: db.archived_months });
+    }
+    const safe = path.resolve(ROOT, `.${decodeURIComponent(url.pathname)}`);
+    if (safe.startsWith(ROOT + path.sep) && fs.existsSync(safe) && fs.statSync(safe).isFile()) return sendFile(res, safe);
+    return sendFile(res, path.join(ROOT, 'index.html'));
+  } catch (error) { return json(res, 500, { error: error.message || 'Server error.' }); }
+});
+app.listen(PORT, () => console.log(`Learn2Earn attendance listening at http://localhost:${PORT} (${TZ})`));

@@ -1,2 +1,14 @@
-# No third-party packages.
-# server.py runs on the Python standard library alone: python server.py
+Django>=5.2,<5.3
+djangorestframework>=3.16,<4
+django-filter>=25,<26
+drf-spectacular>=0.28,<1
+django-cors-headers>=4.7,<5
+psycopg[binary]>=3.2,<4
+celery[redis]>=5.5,<6
+argon2-cffi>=23.1,<26
+qrcode[pil]>=8,<9
+whitenoise>=6.9,<7
+python-dotenv>=1.1,<2
+gunicorn>=23,<24; platform_system != "Windows"
+pytest>=8.3,<9
+pytest-django>=4.11,<5
