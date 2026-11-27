@@ -1,54 +1,146 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#ffffff"><title>Learn2Earn • Attendance</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#052c6b">
+  <title>LEARN 2EARN · Student Attendance Portal</title>
+  <meta name="description" content="LEARN 2EARN student portal: sign in, scan the session QR code and review your monthly attendance history.">
+  <!-- Optional API override. Leave empty to use the same origin as the page (Django serves
+       the portal at /student/ and the API at /api/v1/ on the same host). Set a full URL to
+       point this build at another backend, e.g. http://127.0.0.1:8000/api/v1 -->
+  <meta name="learn2earn-api-base" content="">
+  <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Scanner library is vendored so the portal also works offline / without a CDN. -->
+  <script src="vendor/html5-qrcode.min.js"></script>
+  <script>
+    if (!window.Html5Qrcode) {
+      document.write('<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"><\/script>');
+    }
+  </script>
+  <script defer src="app.js"></script>
 </head>
 <body>
-  <aside class="sidebar">
-    <div class="brand"><img src="/assets/learn2earn-logo.svg" alt="Learn2Earn" class="brand-logo"></div>
-    <div class="nav-label">WORKSPACE</div>
-    <button class="nav-item active" data-page="overview"><span>◫</span> Overview</button>
-    <button class="nav-item" data-page="attendance"><span>▦</span> Attendance <i id="navCount">0</i></button>
-    <button class="nav-item" data-page="students"><span>♙</span> Students</button>
-    <button class="nav-item" data-page="campuses"><span>⌖</span> Campuses</button>
-    <button class="nav-item" data-page="kiosk"><span>▨</span> QR kiosk</button>
-    <button class="nav-item" data-page="archives"><span>▤</span> Reports</button>
-    <div class="side-spacer"></div>
-    <div class="side-card"><div class="live-dot"></div><div><b>Live check-ins</b><small>QR kiosk is ready</small></div><span class="side-arrow">↗</span></div>
-    <button class="profile" id="profileButton" type="button" aria-label="Open mentor profile"><span class="avatar" id="profileAvatar">M</span><span class="profile-copy"><b id="profileName">Mentor workspace</b><small>Learn2Earn</small></span><span class="more">···</span></button>
-  </aside>
-  <main class="main">
-    <header class="topbar"><div class="breadcrumb">Workspace <span>/</span> <b id="crumb">Overview</b></div><div class="top-actions"><label class="campus-picker"><span>⌖</span><select id="campusSelector" aria-label="Selected campus"><option value="">Select campus</option></select></label><button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch to dark mode" title="Switch theme"><span aria-hidden="true">☾</span><b>Dark</b></button><span class="today-pill"><span class="live-dot"></span> LIVE</span><span class="date-top" id="topDate"></span><button class="top-avatar" id="topProfileButton" aria-label="Open mentor profile">M</button></div></header>
-    <section class="page" id="page-overview">
-      <div class="hero-row"><div><div class="eyebrow"><span class="eyebrow-line"></span> MENTOR CONSOLE</div><h1>Attendance,<br><em>in good flow.</em></h1><p class="subhead">A clearer view of who’s here, who’s running late, and every check-in in between.</p></div>
-        <div class="hero-date"><span class="hero-date-icon">◷</span><div><small>TODAY IN LAGOS</small><b id="heroDate">—</b><span id="heroClock">—</span></div><div class="date-bloom">✳</div></div></div>
-      <div class="metrics">
-        <article class="metric metric-dark"><div class="metric-head"><span>Present today</span><span class="metric-icon">↗</span></div><strong id="mChecked">0</strong><div class="metric-foot"><span class="metric-dot"></span>Completed sessions only</div><div class="spark spark-gold"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></article>
-        <article class="metric metric-light"><div class="metric-head"><span>On time</span><span class="metric-icon light-icon">◷</span></div><strong id="mOnTime">0</strong><div class="metric-foot"><span class="status-dot green"></span>Before the 10-minute cutoff</div><div class="spark spark-green"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></article>
-        <article class="metric metric-light"><div class="metric-head"><span>Running late</span><span class="metric-icon light-icon">↘</span></div><strong id="mLate">0</strong><div class="metric-foot"><span class="status-dot orange"></span>At or after cutoff</div><div class="spark spark-orange"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></article>
-        <article class="metric metric-light"><div class="metric-head"><span>On the roster</span><span class="metric-icon light-icon">♙</span></div><strong id="mStudents">0</strong><div class="metric-foot"><span class="status-dot blue"></span>Registered students</div><div class="metric-avatars"><span>✳</span><span>↗</span><span>◷</span><small>YOUR PEOPLE</small></div></article>
+  <noscript><div style="padding:14px 18px;background:#fff3df;color:#976218;font-size:13px;text-align:center">This portal needs JavaScript enabled to sign in and scan attendance.</div></noscript>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="#" aria-label="Learn2Earn student portal home">
+        <img class="brand-logo" src="assets/learn2earn-logo.svg" alt="Learn2Earn">
+        <span class="brand-text"><small>STUDENT PORTAL</small></span>
+      </a>
+      <div class="side-label">MENU</div>
+      <nav>
+        <button class="nav-item active" data-view="dashboard"><span>▦</span> Dashboard</button>
+        <button class="nav-item" data-view="scanner"><span>▣</span> Scan attendance</button>
+        <button class="nav-item" data-view="history"><span>◷</span> Attendance history</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="help-card"><span class="help-icon">?</span><strong>Need help?</strong><p>Contact your mentor or attendance administrator if you cannot sign in or scan.</p></div>
+        <button class="nav-item logout-link" id="logoutBtn"><span>↪</span> Sign out</button>
       </div>
-      <div class="content-grid">
-        <section class="panel attendance-panel"><div class="panel-head"><div><div class="section-kicker">ATTENDANCE OVERVIEW</div><h2>Daily attendance</h2></div><div class="panel-tools"><label class="select-wrap">All statuses <select id="quickStatusFilter"><option value="">All statuses</option><option value="present">Present</option><option value="late">Late</option><option value="absent">Absent</option></select><span>⌄</span></label><label class="date-wrap"><span>▦</span><input type="date" id="dateFilter"></label></div></div>
-          <div class="session-strip" id="sessions"></div>
-          <div class="table-wrap"><table><thead><tr><th>STUDENT</th><th>TRACK</th><th>SESSION</th><th>CHECK-IN</th><th>STATUS</th></tr></thead><tbody id="attendanceBody"></tbody></table></div>
-          <button class="text-link" data-page="attendance">View attendance sheet <span>↗</span></button>
-        </section>
-        <aside class="panel feed-panel"><div class="feed-header"><div><div class="section-kicker">LIVE ACTIVITY</div><h2>Check-in feed <span class="live-dot"></span></h2></div><button class="refresh-btn" id="refresh">↻</button></div><p class="feed-caption">The latest student check-ins from across your sessions.</p><div class="feed-list" id="feedList"></div><div class="feed-foot"><span class="feed-bars">▥</span><span>Updates automatically every few seconds</span></div></aside>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button class="mobile-menu" id="menuBtn" aria-label="Open menu">☰</button>
+        <div><span class="eyebrow">STUDENT WORKSPACE</span><h1 id="pageTitle">Dashboard</h1></div>
+        <div class="top-user"><span class="avatar" id="topAvatar">S</span><span><strong id="topName">Student</strong><small id="topUsername">@username</small><small id="topCampus" class="top-campus"></small></span></div>
+      </header>
+
+      <section class="view active" id="dashboardView">
+        <div class="welcome-row"><div><p class="eyebrow">YOUR ATTENDANCE OVERVIEW</p><h2>Welcome back, <span id="welcomeName">Student</span> 👋</h2><p class="muted">Keep track of your sessions and stay on schedule.</p></div><button class="primary-btn" id="dashboardScanBtn">▣ &nbsp; Scan attendance QR</button></div>
+        <div class="stat-grid">
+          <article class="stat-card"><span class="stat-icon purple">◷</span><span class="stat-label">Sessions attended</span><strong id="statAttended">—</strong><small>This month</small></article>
+          <article class="stat-card"><span class="stat-icon green">✓</span><span class="stat-label">On-time attendance</span><strong id="statOnTime">—</strong><small>Recorded on time</small></article>
+          <article class="stat-card"><span class="stat-icon amber">⌁</span><span class="stat-label">Late attendance</span><strong id="statLate">—</strong><small>Recorded as late</small></article>
+          <article class="stat-card"><span class="stat-icon blue">◔</span><span class="stat-label">Last check-in</span><strong id="statLast">—</strong><small id="statLastMeta">No scan recorded yet</small></article>
+        </div>
+        <div class="content-grid">
+          <article class="panel">
+            <div class="panel-heading"><div><h3>Today's checkpoints</h3><p class="muted" id="checkpointHint">Morning, afternoon and evening are recorded separately</p></div><span class="profile-symbol">◎</span></div>
+            <div class="table-wrap"><table><thead><tr><th>CHECKPOINT</th><th>STATE</th><th>DETAIL</th></tr></thead><tbody id="checkpointRows"><tr><td colspan="3" class="empty-cell">Loading today's checkpoints…</td></tr></tbody></table></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><h3>Recent attendance</h3><p class="muted">Your latest recorded sessions</p></div><button class="text-btn" data-go="history">View all →</button></div>
+            <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>ACTION</th><th>DATE</th><th id="recentTimeHeader">TIME (CAMPUS LOCAL)</th><th>STATUS</th></tr></thead><tbody id="recentRows"><tr><td colspan="5" class="empty-cell">Loading your attendance…</td></tr></tbody></table></div>
+          </article>
+          <article class="panel profile-panel"><div class="panel-heading"><div><h3>My profile</h3><p class="muted">Your enrolled details</p></div><span class="profile-symbol">♙</span></div><div class="profile-detail"><small>FULL NAME</small><strong id="profileName">—</strong></div><div class="profile-detail"><small>ATTENDANCE USERNAME</small><strong id="profileUsername">—</strong></div><div class="profile-detail"><small>CAMPUS</small><strong id="profileCampus">—</strong></div><div class="profile-detail"><small>ACCOUNT STATUS</small><strong><span class="status-dot"></span> Active</strong></div><div class="profile-note">Your account is created and managed by your mentor. Your attendance username identifies your records, so keep your login details private.</div></article>
+        </div>
+      </section>
+
+      <section class="view" id="scannerView">
+        <div class="section-intro"><p class="eyebrow">CHECK IN TO A SESSION</p><h2>Scan attendance QR</h2><p class="muted">Allow camera and location access, then point your phone at the QR code displayed by your mentor.</p></div>
+        <div class="scanner-layout">
+          <article class="panel scanner-panel"><div class="scanner-heading"><span class="camera-icon">▣</span><div><h3>QR code scanner</h3><p class="muted">Keep the QR code inside the frame</p></div></div><div id="reader"><div class="scanner-placeholder"><span>▦</span><strong>Your camera preview will appear here</strong><small>Use a secure connection (HTTPS) and allow camera access.</small></div></div><div class="scanner-actions"><button class="primary-btn" id="startScanBtn">Start camera</button><button class="secondary-btn" id="stopScanBtn" disabled>Stop camera</button></div><p class="scanner-hint">Camera and location access work on HTTPS or localhost. Your location is sent with the scan so the server can confirm you are on campus.</p></article>
+          <article class="panel instruction-panel"><h3>How to check in</h3><ol><li><span>1</span><div><strong>Ask your mentor to display the QR</strong><p>Session codes are short-lived, so scan the code that is on screen now.</p></div></li><li><span>2</span><div><strong>Allow camera and location</strong><p>Your browser will ask for both. The scan cannot be recorded without them.</p></div></li><li><span>3</span><div><strong>Scan and wait for confirmation</strong><p>Keep the QR code steady until the server confirms your attendance.</p></div></li></ol><div class="security-note">🔒 Your attendance is only recorded after the server verifies the session, the QR code and your campus location.</div></article>
+        </div>
+        <div class="scan-state hidden" id="scanState" role="status">
+          <span class="scan-spinner" aria-hidden="true"></span>
+          <div><strong id="scanStateTitle">Verifying scan…</strong><small id="scanStateText">Checking your QR code and location with the attendance server.</small></div>
+        </div>
+        <div class="notice hidden" id="scanNotice" role="alert"></div>
+        <div class="scan-retry hidden" id="scanRetry"><button class="primary-btn" id="retryScanBtn">Try scanning again</button><button class="secondary-btn" id="retryCameraBtn">Restart camera</button></div>
+      </section>
+
+      <section class="view" id="historyView">
+        <div class="section-intro"><p class="eyebrow">YOUR RECORD</p><h2>Attendance history</h2><p class="muted">Review your attendance records by month.</p></div>
+        <article class="panel">
+          <div class="history-toolbar"><div><h3>Monthly records</h3><p class="muted">Times are displayed in your campus's local timezone.</p></div><input type="month" id="monthFilter" aria-label="Filter attendance by month"></div>
+          <div class="table-wrap"><table><thead><tr><th>SESSION</th><th>ACTION</th><th>DATE</th><th id="historyTimeHeader">TIME (CAMPUS LOCAL)</th><th>STATUS</th></tr></thead><tbody id="historyRows"><tr><td colspan="5" class="empty-cell">Loading your attendance…</td></tr></tbody></table></div>
+          <div class="table-foot" id="historyCount">—</div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <div class="auth-screen" id="authScreen">
+    <div class="auth-content">
+      <div class="auth-card">
+        <div class="auth-brand"><img class="brand-logo" src="assets/learn2earn-logo.svg" alt="Learn2Earn"></div>
+        <p class="eyebrow">STUDENT PORTAL</p>
+        <div id="loginForm">
+          <h2>Sign in to your account</h2>
+          <p class="muted">Enter the attendance username and password your mentor gave you.</p>
+          <form id="loginFormEl">
+            <label for="loginUsername">Attendance username</label>
+            <input id="loginUsername" name="username" autocomplete="username" placeholder="e.g. myles_odeh" required>
+            <label for="loginPassword">Password</label>
+            <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+            <button class="primary-btn full-btn" type="submit">Sign in <span>&rarr;</span></button>
+          </form>
+          <div class="enroll-note" id="enrollNote"><strong>Need an account?</strong><p>Your account must be created by a mentor or administrator. Please contact your mentor to obtain your login details.</p></div>
+          <p class="session-note">For your security this session ends after 12 hours, or as soon as you sign out.</p>
+        </div>
+        <div class="auth-alert hidden" id="authAlert" role="alert"></div>
+        <div class="demo-note" id="connectionNote">Connecting to the attendance service…</div>
       </div>
-      <footer>Made for focused mornings and smoother check-ins. <span>✳</span></footer>
-    </section>
-    <section class="page hidden" id="page-attendance"><div class="subpage-head"><div><div class="eyebrow"><span class="eyebrow-line"></span> MENTOR CONSOLE</div><h1>Your attendance<br><em>sheet.</em></h1><p class="subhead">Filter, search, and review one attendance result per student for a day.</p></div><button class="button button-dark" id="exportBtn">↓ &nbsp; Export CSV</button></div><div class="panel full-panel"><div class="panel-head"><div><div class="section-kicker">ATTENDANCE RECORDS</div><h2>Daily attendance</h2></div><div class="panel-tools"><input class="search-input" id="searchInput" placeholder="Search students…"><label class="select-wrap">All statuses <select id="statusFilter"><option value="">All statuses</option><option value="present">Present</option><option value="late">Late</option><option value="absent">Absent</option></select><span>⌄</span></label></div></div><div class="sheet-summary" id="sheetSummary"></div><div class="table-wrap"><table><thead><tr><th>STUDENT</th><th>USERNAME</th><th>TRACK</th><th>CAMPUS</th><th>SESSION</th><th>TIME (WAT)</th><th>STATUS</th><th>SOURCE</th><th>LOCATION</th><th>ACTION</th></tr></thead><tbody id="fullBody"></tbody></table></div></div></section>
-    <section class="page hidden" id="page-students"><div class="subpage-head"><div><div class="eyebrow"><span class="eyebrow-line"></span> MENTOR CONSOLE</div><h1>Good people,<br><em>good progress.</em></h1><p class="subhead">Manage campus rosters. New students must receive a campus and an initial password.</p></div></div><div class="student-layout"><section class="panel full-panel"><div class="panel-head"><div><div class="section-kicker">STUDENT ROSTER</div><h2 id="rosterCount">Students</h2></div><input class="search-input" id="rosterSearch" placeholder="Search students…"></div><div class="table-wrap"><table><thead><tr><th>STUDENT</th><th>USERNAME</th><th>TRACK</th><th>JOINED</th><th>ACTION</th></tr></thead><tbody id="studentBody"></tbody></table></div></section><aside class="panel add-panel"><div class="section-kicker">GROW THE ROSTER</div><h2>Add a student</h2><p>Use an attendance username and a temporary password to create their account.</p><form id="studentForm"><label>Full name<input name="full_name" required placeholder="e.g. Ada Okafor"></label><label>Attendance username<input name="username" required minlength="2" placeholder="e.g. ada.okafor"></label><label>Initial password<input name="password" type="password" required minlength="12" placeholder="At least 12 characters"></label><label>Campus<select name="campus" id="studentCampus" required><option value="">Choose campus</option></select></label><label>Programming track<select name="track" id="studentTrack"><option value="">No track selected</option></select></label><button class="button button-dark" type="submit">Add student <span>↗</span></button><div class="form-message" id="formMessage"></div></form><form id="studentImportForm" class="import-form"><label>Bulk upload CSV<input type="file" name="file" accept=".csv,text/csv" required></label><small>CSV columns: username, password, full_name, email, campus_id. Keep this file private because it contains initial passwords.</small><button class="button button-outline" type="submit">Import CSV</button><div class="form-message" id="importMessage"></div></form><div class="data-note"><b>Roster storage</b><span>Student profiles and historical attendance are kept during monthly report closures.</span></div></aside></div></section>
-    <section class="page hidden" id="page-campuses"><div class="subpage-head"><div><div class="eyebrow"><span class="eyebrow-line"></span> MENTOR CONSOLE</div><h1>Many campuses,<br><em>one community.</em></h1><p class="subhead">Review campus access, time zone, and configured geofence details.</p></div></div><div class="student-layout"><section class="panel full-panel"><div class="panel-head"><div><div class="section-kicker">AUTHORISED CAMPUSES</div><h2>Campus directory</h2></div></div><div id="campusList" class="campus-list"></div></section><aside class="panel add-panel" id="campusCreatePanel"><div class="section-kicker">SUPER ADMINISTRATION</div><h2>Add a listed hub</h2><p>Select an official campus to add its address to the system. Set its coordinates in Django Admin before enabling attendance scans.</p><form id="campusDirectoryForm"><label>State / FCT<select id="campusRegion" required><option value="">Choose a state</option></select></label><label>Campus<select id="campusTemplate" required disabled><option value="">Choose a state first</option></select></label><button class="button button-dark" type="submit">Add selected campus <span>↗</span></button><div class="form-message" id="campusDirectoryMessage"></div></form><details class="manual-campus"><summary>Add a different campus manually</summary><form id="campusForm"><label>Campus name<input name="name" required placeholder="e.g. Lagos Campus"></label><label>Address<input name="address" placeholder="Street, city"></label><label>Latitude<input name="latitude" type="number" step="any"></label><label>Longitude<input name="longitude" type="number" step="any"></label><label>Geofence radius in metres<input name="geofence_radius_m" type="number" min="20" value="150"></label><button class="button button-outline" type="submit">Create campus <span>↗</span></button><div class="form-message" id="campusMessage"></div></form></details></aside></div></section>
-    <section class="page hidden" id="page-kiosk"><div class="subpage-head"><div><div class="eyebrow"><span class="eyebrow-line"></span> MENTOR CONSOLE</div><h1>A QR that keeps<br><em>things moving.</em></h1><p class="subhead">Put the live kiosk on a screen. Students can scan in from wherever they are.</p></div></div><div class="kiosk-layout"><div class="panel kiosk-controls"><div class="section-kicker">MENTOR LIVE QR KIOSK</div><h2>Choose a session</h2><label class="kiosk-campus-label">Campus<select id="kioskCampus"></select></label><p>Select the session you’re taking attendance for. The QR token refreshes every 30 seconds.</p><div class="session-choices"><button class="session-choice selected" data-session="morning"><span>☀</span><b>Morning</b><small>9:00 AM · cutoff 9:10</small></button><button class="session-choice" data-session="afternoon"><span>◒</span><b>Afternoon</b><small>1:00 PM · cutoff 1:10</small></button><button class="session-choice" data-session="evening"><span>☾</span><b>Evening</b><small>5:00 PM · cutoff 5:10</small></button></div><div class="kiosk-buttons"><button class="button button-dark" id="startSession">Start session</button><button class="button button-outline" id="endSession" disabled>End session</button></div><div class="kiosk-tip"><span>✳</span><p><b>Live tokens, less waiting.</b><br>Each QR expires after 30 seconds. Students can’t reuse old screenshots.</p></div><div class="qr-state"><span class="live-dot"></span><span id="sessionState">Session closed</span><b id="qrRefresh">—</b></div></div><div class="kiosk-display"><div class="kiosk-top"><span>LEARN2EARN <b>·</b> ATTENDANCE</span><span id="kioskCampusName">SELECT CAMPUS</span></div><div class="kiosk-main"><div class="kiosk-sun">✳</div><div class="kiosk-session-label" id="kioskLabel">MENTOR KIOSK</div><h2>Scan to<br>check in.</h2><p>Students scan using their authenticated account.<br>GPS must place them inside this campus geofence.</p><div class="qr-frame" id="qrFrame"><div class="qr-wait">Start a scheduled session<br>to show its live QR.</div></div><div class="kiosk-stats"><span>Successful scans <b id="kioskScans">0</b></span><span>Late arrivals <b id="kioskLate">0</b></span></div><div class="kiosk-user">⌖ &nbsp; One scan per student, per session</div></div><div class="kiosk-bottom"><span>LEARN2EARN PROGRAMMING SCHOOL</span><span id="kioskTime">—</span></div></div></div></section>
-    <section class="page hidden" id="page-archives"><div class="subpage-head"><div><div class="eyebrow"><span class="eyebrow-line"></span> MENTOR CONSOLE</div><h1>Your history,<br><em>kept close.</em></h1><p class="subhead">Closed monthly reports remain available; attendance records are never deleted.</p></div></div><div class="panel full-panel"><div class="panel-head"><div><div class="section-kicker">MONTHLY REPORTS</div><h2>Reporting periods</h2></div></div><div id="archivesList" class="archive-list"></div><div class="reset-box"><div><b>Close a completed month</b><span>Generate a campus CSV and JSON report. Original attendance records remain in PostgreSQL.</span></div><button class="button button-dark" id="closeMonthBtn">Close month &amp; export report</button></div></div></section>
-    <div class="toast" id="toast"></div>
-    <div class="modal-backdrop hidden" id="profileModal" role="presentation"><section class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profileTitle"><button class="modal-close" id="closeProfile" aria-label="Close">×</button><div class="section-kicker">MENTOR ACCOUNT</div><h2 id="profileTitle">Your profile</h2><p class="modal-copy">Set the name shown in your workspace and protect this local mentor account with a password.</p><form id="profileForm"><label>Display name<input name="display_name" id="displayNameInput" maxlength="60" required></label><label>New password <span class="optional">(leave blank to keep current)</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="At least 8 characters"></label><button class="button button-dark" type="submit">Save profile</button><div class="form-message" id="profileMessage"></div></form><div class="profile-security">This starter account is stored on this computer. Connect a school authentication provider before deploying for multiple mentors.</div><button class="signout-button" id="signOutButton">Sign out of this browser</button></section></div>
-  </main>
-  <script src="/app.js"></script>
-</body></html>
+      <div class="auth-bottom">© <span id="year"></span> Learn2Earn · Student Portal</div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="confirmationModal" role="dialog" aria-modal="true" aria-labelledby="confirmationTitle">
+    <div class="confirmation-card" role="document" tabindex="-1">
+      <div class="success-mark" id="confirmationMark">✓</div>
+      <p class="eyebrow" id="confirmationEyebrow">ATTENDANCE VERIFIED</p>
+      <h2 id="confirmationTitle">You're checked in!</h2>
+      <p class="muted" id="confirmationSubtitle">Your attendance has been recorded successfully.</p>
+      <div class="confirmation-details">
+        <div><small>FULL NAME</small><strong id="confirmName">—</strong></div>
+        <div><small>USERNAME</small><strong id="confirmUsername">—</strong></div>
+        <div><small>SESSION</small><strong id="confirmSession">—</strong></div>
+        <div><small>DATE</small><strong id="confirmDate">—</strong></div>
+        <div><small>RECORDED (CANONICAL)</small><strong id="confirmUtc">—</strong></div>
+        <div><small id="confirmTimeLabel">TIME (CAMPUS LOCAL)</small><strong id="confirmTime">—</strong></div>
+        <div id="confirmActionRow" class="hidden"><small>BACKEND ACTION</small><strong id="confirmAction">—</strong></div>
+      </div>
+      <div class="confirmation-status" id="confirmStatus" data-status="">ON TIME</div>
+      <button class="primary-btn full-btn" id="closeConfirmation">Done</button>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+</body>
+</html>

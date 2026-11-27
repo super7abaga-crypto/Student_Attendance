@@ -1,60 +1,1013 @@
-const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const API='/api/v1';
-const CAMPUS_DIRECTORY=[['Abuja (FCT)','NASENI Innovation Hub','No. 17, M.S. Haruna Avenue, Idu Industrial Area, P.M.B 391, Garki, Abuja'],['Benue','LEEF Centre',"Old Makurdi Road, Off Burnt Bricks, near St. Helen's Hospital, Otukpo"],['Ekiti','Kinplus Technologies','1st & 2nd Floor, Christore Building, Opp. Crunchies (around State Hospital), Similoluwa, Ado-Ekiti'],['Kwara','MalHub','1 Ilofa Road, GRA, Ilorin'],['Lagos','Pier Place','14 Montgomery Road, Yaba, Lagos'],['Plateau','nHub Jos','TAEN Business Complex, Jos'],['Rivers','CTEC','18 Tombia Street, GRA, Port Harcourt'],['Lagos (Ikorodu)','SAIL Innovation Lab','1, Muba Abiru Street, Ikorodu, Lagos'],['Lagos (Ikorodu)','SAIL STEM Lab','1, Muba Abiru Street, Ikorodu, Lagos'],['Kwara (Ilorin)','Ilorin Innovation Hub','Ahmadu Bello Way, Ilorin']];
-const state={authenticated:false,profile:null,campuses:[],campus:'',date:'',status:'',session:'morning',runId:'',qrExpires:0,qrTimer:null,qrLoading:false,refreshTimer:null,search:'',rosterSearch:'',students:[],rows:[],summary:null};
-const sessionMeta={morning:{title:'Morning',icon:'☀',action:'Check-in'},afternoon:{title:'Afternoon',icon:'◒',action:'Check-in'},evening:{title:'Evening',icon:'☾',action:'Check-out'}};
-function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function initials(s){return String(s||'?').trim().split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();}
-function watClock(){return new Intl.DateTimeFormat('en-NG',{timeZone:'Africa/Lagos',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true}).format(new Date());}
-function dateLabel(d){return new Intl.DateTimeFormat('en-NG',{timeZone:'Africa/Lagos',weekday:'short',day:'numeric',month:'short',year:'numeric'}).format(new Date(`${d}T12:00:00`));}
-function showToast(s){const t=$('#toast');t.textContent=s;t.classList.add('show');clearTimeout(showToast.timer);showToast.timer=setTimeout(()=>t.classList.remove('show'),3000);}
-function setTheme(theme){const dark=theme==='dark';document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('l2e-theme',dark?'dark':'light');const b=$('#themeToggle');if(b){b.querySelector('span').textContent=dark?'☀':'☾';b.querySelector('b').textContent=dark?'Light':'Dark';b.setAttribute('aria-label',`Switch to ${dark?'light':'dark'} mode`);}}
-function stopQrRefresh(){if(state.qrTimer)clearInterval(state.qrTimer);state.qrTimer=null;$('#qrRefresh').textContent='—';}
-function startQrRefresh(){stopQrRefresh();state.qrTimer=setInterval(()=>{const remaining=Math.max(0,Math.ceil((state.qrExpires-Date.now())/1000));$('#qrRefresh').textContent=`Refresh in ${remaining}s`;if(remaining<=8&&!state.qrLoading)getQr();},1000);}
-function csrfToken(){return document.cookie.split(';').map(v=>v.trim()).find(v=>v.startsWith('csrftoken='))?.slice(10)||'';}
-async function api(path,opts={}){const headers={...(opts.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(state.authenticated?{'X-CSRFToken':csrfToken()} : {}),...(opts.headers||{})};const res=await fetch(path,{credentials:'same-origin',...opts,headers});const type=res.headers.get('content-type')||'';const data=type.includes('application/json')?await res.json():await res.text();if(res.status===401&&state.authenticated){state.authenticated=false;gateApp();}if(!res.ok)throw new Error(data?.message||data?.detail||data?.error||`Request failed (${res.status}).`);return data;}
-function paintProfile(name){const n=name||'Mentor';$('#profileName').textContent=n;$('#profileAvatar').textContent=initials(n).slice(0,1);$('#topProfileButton').textContent=initials(n).slice(0,1);}
-function gateApp(){state.authenticated=false;document.querySelector('.auth-gate')?.remove();const markup=`<div class="auth-gate"><form class="auth-card" id="authForm"><img src="/assets/learn2earn-logo.svg" class="auth-logo" alt="Learn2Earn"><div class="section-kicker">ATTENDANCE · MENTOR CONSOLE</div><h1>Welcome to your<br><em>attendance hub.</em></h1><p>Sign in with your individual Learn2Earn mentor or administrator account.</p><label>Username<input name="username" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button button-dark" type="submit">Sign in <span>↗</span></button><div class="form-message" id="authMessage"></div><small class="auth-help">First admin? Run <code>python manage.py createsuperuser</code> in the project folder.</small></form></div>`;document.body.insertAdjacentHTML('beforeend',markup);$('#authForm').addEventListener('submit',async e=>{e.preventDefault();const m=$('#authMessage');try{const f=Object.fromEntries(new FormData(e.currentTarget));const r=await api(`${API}/auth/mentor/login/`,{method:'POST',body:JSON.stringify(f)});state.authenticated=true;state.profile=null;paintProfile(r.display_name);document.querySelector('.auth-gate').remove();await boot();}catch(err){m.textContent=err.message;m.classList.add('error');}});}
-function canCorrect(campusId){const p=state.profile||{};return ['super_admin','campus_admin'].includes(p.role)||(p.role==='mentor'&&(p.campus_access||[]).some(x=>x.campus_id===campusId&&x.can_correct_attendance));}
-function badge(status){const label=({present:'Present',late:'Late',absent:'Absent'})[status]||status||'—';const cls=status==='present'?'badge-on-time':status==='late'?'badge-late':'badge-absent';return `<span class="badge ${cls}">${esc(label)}</span>`;}
-function avatar(name,i=0){return `<span class="student-avatar ${['','av2','av3','av4'][i%4]}">${esc(initials(name))}</span>`;}
-function studentCell(x,i){return `<div class="student-cell">${avatar(x.full_name,i)}<div><div class="student-name">${esc(x.full_name)}</div><div class="student-user">@${esc(x.username)}</div></div></div>`;}
-function setPage(page){$$('.page').forEach(x=>x.classList.toggle('hidden',x.id!==`page-${page}`));$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.page===page));$('#crumb').textContent=({overview:'Overview',attendance:'Attendance',students:'Students',campuses:'Campuses',kiosk:'QR kiosk',archives:'Reports'})[page]||page;if(page==='kiosk')openKiosk();if(page==='students')loadStudents();if(page==='campuses')loadCampuses();if(page==='archives')loadArchives();}
-function fillCampusOptions(){const options=state.campuses.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');for(const id of ['campusSelector','studentCampus','kioskCampus']){const el=$(`#${id}`);if(!el)continue;const placeholder=id==='studentCampus'?'<option value="">Choose campus</option>':'';el.innerHTML=placeholder+options;if(id==='studentCampus')el.value=state.campus;else el.value=state.campus;}}
-async function loadCampuses(){const r=await api(`${API}/admin/campuses/`);state.campuses=r.results||r;fillCampusOptions();if(state.campuses.length&&!state.campus){state.campus=state.campuses[0].id;fillCampusOptions();}const region=$('#campusRegion'),template=$('#campusTemplate');if(region&&template){const existing=new Set(state.campuses.map(c=>c.name));const available=CAMPUS_DIRECTORY.filter(([,name])=>!existing.has(name));const regions=[...new Set(available.map(([place])=>place))];const selectedRegion=region.value;region.innerHTML='<option value="">Choose a state</option>'+regions.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');region.value=regions.includes(selectedRegion)?selectedRegion:'';const entries=available.filter(([place])=>place===region.value);template.innerHTML='<option value="">Choose a campus</option>'+entries.map(([,name,address])=>`<option value="${esc(name)}">${esc(name)} — ${esc(address)}</option>`).join('');template.disabled=!region.value;}if($('#campusList')){$('#campusList').innerHTML=state.campuses.length?state.campuses.map(c=>`<article class="campus-row"><span class="campus-symbol">⌖</span><div class="campus-info"><b>${esc(c.name)}</b><small>${esc(c.address||'Address not set')} · ${esc(c.timezone||'Africa/Lagos')}</small></div><span class="track-tag">${c.active?'Active':'Inactive'}</span><small class="campus-radius">${c.latitude&&c.longitude?`${esc(c.geofence_radius_m)} m geofence`:'Geofence not configured'}</small></article>`).join(''):'<div class="empty">No campuses are assigned to this account yet. Ask a super administrator to assign campus access.</div>';}}
-async function loadTracks(campusId){const el=$('#studentTrack');if(!el)return;try{const r=await api(`${API}/admin/tracks/?campus_id=${encodeURIComponent(campusId||'')}`);el.innerHTML='<option value="">No track selected</option>'+(r.results||[]).map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');}catch{el.innerHTML='<option value="">No track selected</option>';}}
-async function refresh(){if(!state.campus)return;const date=$('#dateFilter').value||new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Lagos',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());state.date=date;const params=new URLSearchParams({campus_id:state.campus,date});if(state.status)params.set('status',state.status);const attendance=await api(`${API}/mentor/attendance/?${params}`);const summary=await api(`${API}/mentor/attendance/summary/?${params}`);state.rows=attendance.results||[];state.summary=summary.summary;renderDashboard();}
-function renderDashboard(){const rows=state.rows,s=state.summary||{};$('#mChecked').textContent=s.present??0;$('#mOnTime').textContent=s.on_time??0;$('#mLate').textContent=s.late??0;$('#mStudents').textContent=s.active_students??0;if($('#kioskScans'))$('#kioskScans').textContent=s.present??0;if($('#kioskLate'))$('#kioskLate').textContent=s.late??0;$('#navCount').textContent=s.present??0;$('#heroDate').textContent=dateLabel(state.date||new Date().toISOString().slice(0,10));$('#heroClock').textContent=`${watClock()} WAT`;$('#topDate').textContent=dateLabel(state.date||new Date().toISOString().slice(0,10));const counts=Object.fromEntries(Object.keys(sessionMeta).map(k=>[k,rows.filter(x=>x.session_type===k&&x.status!=='absent').length]));$('#sessions').innerHTML=Object.keys(sessionMeta).map(k=>`<div class="session-chip"><span class="session-icon">${sessionMeta[k].icon}</span><div><b>${sessionMeta[k].title} · ${sessionMeta[k].action}</b><small>${({morning:'9:00 AM',afternoon:'1:00 PM',evening:'5:00 PM'})[k]}</small></div><span class="session-count">${counts[k]}</span></div>`).join('');const filtered=rows.filter(x=>(!state.search||`${x.full_name} ${x.username} ${x.track_name}`.toLowerCase().includes(state.search.toLowerCase())));const overview=filtered.slice(0,6);$('#attendanceBody').innerHTML=overview.length?overview.map((x,i)=>`<tr><td>${studentCell(x,i)}</td><td><span class="track-tag">${esc(x.track_name||'—')}</span></td><td class="session-text">${esc(sessionMeta[x.session_type]?.title||x.session_type)} · ${esc(x.attendance_action==='check_out'?'Out':'In')}</td><td class="time-text">${esc(x.scan_time_wat||'—')}</td><td>${badge(x.status)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No records for this date. Absences appear after each session closes.</td></tr>';$('#fullBody').innerHTML=filtered.length?filtered.map((x,i)=>`<tr><td>${studentCell(x,i)}</td><td>@${esc(x.username)}</td><td><span class="track-tag">${esc(x.track_name||'—')}</span></td><td>${esc(x.campus_name||'')}</td><td>${esc(sessionMeta[x.session_type]?.title||x.session_type)} · ${esc(x.attendance_action)}</td><td class="time-text">${esc(x.scan_time_wat||'—')}</td><td>${badge(x.status)}</td><td>${esc(x.source_label||x.source)}</td><td>${x.location_verified?'Verified':'—'}</td><td>${canCorrect(x.campus)?`<button class="row-action" data-attendance-edit data-id="${esc(x.id)}" data-student="${esc(x.student_id)}" data-session="${esc(x.session_type)}">Correct</button>`:'—'}</td></tr>`).join(''):'<tr><td colspan="9" class="empty">No matching attendance records.</td></tr>';$('#sheetSummary').innerHTML=`<b>${filtered.length}</b> records · ${s.present||0} present · ${s.late||0} late · ${s.absent||0} absent · ${s.not_checked_out||0} not checked out`;const feed=rows.filter(x=>x.status!=='absent').slice(0,8);$('#feedList').innerHTML=feed.length?feed.map((x,i)=>`<div class="feed-row">${avatar(x.full_name,i)}<div class="feed-main"><b>${esc(x.full_name)}</b><small>@${esc(x.username)} · ${esc(x.campus_name||'')}</small></div><div class="feed-right"><small>${esc(x.scan_time_wat)} WAT</small>${badge(x.status)}</div></div>`).join(''):'<div class="empty">New student check-ins will appear here.</div>';}
-async function loadStudents(){if(!state.campus)return;try{const p=new URLSearchParams({campus:state.campus,page_size:'100'});if(state.rosterSearch)p.set('search',state.rosterSearch);const r=await api(`${API}/admin/students/?${p}`);state.students=r.results||[];$('#rosterCount').textContent=`Students · ${r.count??state.students.length}`;$('#studentBody').innerHTML=state.students.length?state.students.map((s,i)=>`<tr><td>${studentCell(s,i)}</td><td>@${esc(s.username)}</td><td><span class="track-tag">${esc(s.track_name||'—')}</span></td><td>${esc(s.registration_date||'—')}</td><td>${s.active?`<button class="row-action danger" data-student-toggle="deactivate" data-id="${esc(s.id)}">Deactivate</button>`:`<button class="row-action" data-student-toggle="reactivate" data-id="${esc(s.id)}">Reactivate</button>`} <button class="row-action" data-student-transfer data-id="${esc(s.id)}">Transfer</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty">No students found. Add a student with the campus administrator account.</td></tr>';fillCampusOptions();await loadTracks(state.campus);}catch(e){showToast(e.message);}}
-async function loadArchives(){if(!state.campus)return;try{const r=await api(`${API}/admin/monthly-reports/?campus_id=${encodeURIComponent(state.campus)}`);const items=r.results||[];$('#archivesList').innerHTML=items.length?items.map(x=>`<div class="archive-row"><div><b>${esc(x.year)}-${String(x.month).padStart(2,'0')} · ${esc(x.campus)}</b><small>${esc(x.record_count)} records · ${x.closed?'Closed':'Reopened'} · ${esc(new Date(x.generated_at).toLocaleString())}</small></div><a class="archive-download" href="${esc(x.csv_url)}" data-download="${esc(x.csv_url)}">Download CSV ↓</a></div>`).join(''):'<div class="empty">No monthly reports yet. Only completed months can be closed.</div>';}catch(e){showToast(e.message);}}
-async function closeMonth(){if(!state.campus)return showToast('Choose a campus first.');try{const r=await api(`${API}/admin/monthly-close/`,{method:'POST',body:JSON.stringify({campus_id:state.campus})});const res=await fetch(r.csv_url,{credentials:'same-origin'});if(res.ok){const blob=await res.blob(),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${r.year}-${String(r.month).padStart(2,'0')}-attendance.csv`;a.click();URL.revokeObjectURL(a.href);}showToast(`Closed ${r.year}-${String(r.month).padStart(2,'0')} · ${r.record_count} records.`);await loadArchives();}catch(e){showToast(e.message);}}
-async function startSession(){if(!state.campus)return showToast('Choose a campus first.');try{const r=await api(`${API}/mentor/qr/start/`,{method:'POST',body:JSON.stringify({campus_id:state.campus,session_type:state.session})});state.runId=r.session_id;$('#sessionState').textContent='Session open';$('#startSession').disabled=true;$('#endSession').disabled=false;if(await getQr())startQrRefresh();showToast(`${sessionMeta[state.session].title} ${sessionMeta[state.session].action.toLowerCase()} session opened.`);}catch(e){showToast(e.message);}}
-async function getQr(){if(!state.runId||state.qrLoading)return false;state.qrLoading=true;let success=false;try{const r=await api(`${API}/mentor/qr/current/?campus_id=${encodeURIComponent(state.campus)}&session_type=${state.session}`);state.qrExpires=r.expires_at*1000;const img=await fetch(r.qr_image_url,{credentials:'same-origin'});if(!img.ok)throw Error(`Could not render QR (${img.status}).`);const blob=await img.blob(),old=$('#qrFrame img')?.src;$('#qrFrame').innerHTML=`<img alt="Live ${esc(r.session_type)} attendance QR" src="${URL.createObjectURL(blob)}">`;if(old?.startsWith('blob:'))URL.revokeObjectURL(old);$('#kioskLabel').textContent=`${state.session.toUpperCase()} · ${r.attendance_action.replace('_',' ').toUpperCase()}`;$('#kioskCampusName').textContent=String(r.campus).toUpperCase();$('#sessionState').textContent='Session open';$('#endSession').disabled=false;success=true;}catch(e){$('#qrFrame').innerHTML=`<div class="qr-wait">${esc(e.message)}</div>`;stopQrRefresh();}finally{state.qrLoading=false;}return success;}
-function openKiosk(){if(!state.campus)return;stopQrRefresh();state.runId='';$('#sessionState').textContent='Session closed';$('#startSession').disabled=false;$('#endSession').disabled=true;const url=`${API}/mentor/qr/current/?campus_id=${encodeURIComponent(state.campus)}&session_type=${state.session}`;api(url).then(async r=>{state.runId=r.session_id;$('#sessionState').textContent='Session open';$('#startSession').disabled=true;$('#endSession').disabled=false;if(await getQr())startQrRefresh();}).catch(()=>{ $('#qrFrame').innerHTML='<div class="qr-wait">Start a scheduled session<br>to show its live QR.</div>';});}
-async function endSession(){if(!state.runId)return;try{await api(`${API}/mentor/qr/end/`,{method:'POST',body:JSON.stringify({session_id:state.runId})});state.runId='';stopQrRefresh();$('#sessionState').textContent='Session closed';$('#qrFrame').innerHTML='<div class="qr-wait">Session ended.<br>Start another scheduled session when ready.</div>';$('#startSession').disabled=false;$('#endSession').disabled=true;showToast('Session closed. Existing QR tokens are revoked.');}catch(e){showToast(e.message);}}
-async function downloadProtected(url,filename){try{const r=await fetch(url,{credentials:'same-origin'});if(!r.ok)throw Error('Report download failed.');const a=document.createElement('a'),blob=await r.blob();a.href=URL.createObjectURL(blob);a.download=filename;a.click();URL.revokeObjectURL(a.href);}catch(e){showToast(e.message);}}
-async function openProfile(){try{const p=await api(`${API}/auth/mentor/profile/`);$('#displayNameInput').value=p.display_name;$('#profileMessage').textContent='';$('#profileModal').classList.remove('hidden');}catch(e){showToast(e.message);}}
-function events(){
-  $$('.nav-item').forEach(n=>n.addEventListener('click',()=>setPage(n.dataset.page)));$$('[data-page="attendance"]').forEach(n=>n.addEventListener('click',()=>setPage('attendance')));
-  $('#campusSelector').addEventListener('change',async e=>{stopQrRefresh();state.runId='';state.campus=e.target.value;fillCampusOptions();await loadTracks(state.campus);await refresh().catch(x=>showToast(x.message));if(state.page==='students')loadStudents();if(state.page==='kiosk')openKiosk();if(state.page==='archives')loadArchives();});
-  $('#studentCampus').addEventListener('change',e=>loadTracks(e.target.value));$('#kioskCampus').addEventListener('change',e=>{state.campus=e.target.value;$('#campusSelector').value=state.campus;fillCampusOptions();openKiosk();});
-  $('#dateFilter').addEventListener('change',()=>refresh().catch(e=>showToast(e.message)));$('#statusFilter').addEventListener('change',e=>{state.status=e.target.value;refresh().catch(x=>showToast(x.message));});$('#quickStatusFilter').addEventListener('change',e=>{$('#statusFilter').value=e.target.value;state.status=e.target.value;refresh().catch(x=>showToast(x.message));});$('#searchInput').addEventListener('input',e=>{state.search=e.target.value;renderDashboard();});$('#rosterSearch').addEventListener('input',e=>{state.rosterSearch=e.target.value;loadStudents();});
-  $$('.session-choice').forEach(b=>b.addEventListener('click',()=>{stopQrRefresh();$$('.session-choice').forEach(x=>x.classList.toggle('selected',x===b));state.session=b.dataset.session;state.runId='';$('#startSession').disabled=false;$('#endSession').disabled=true;$('#sessionState').textContent='Session closed';$('#qrFrame').innerHTML='<div class="qr-wait">Start this scheduled session<br>to show its live QR.</div>';}));$('#startSession').addEventListener('click',startSession);$('#endSession').addEventListener('click',endSession);$('#refresh').addEventListener('click',()=>refresh().catch(e=>showToast(e.message)));
-  $('#studentForm').addEventListener('submit',async e=>{e.preventDefault();const msg=$('#formMessage'),f=Object.fromEntries(new FormData(e.currentTarget));f.username=f.username.toLowerCase().replace(/\s+/g,'');try{await api(`${API}/auth/student/register/`,{method:'POST',body:JSON.stringify(f)});e.currentTarget.reset();msg.textContent='Student account created.';msg.classList.remove('error');await loadStudents();}catch(x){msg.textContent=x.message;msg.classList.add('error');}});
-  $('#campusForm').addEventListener('submit',async e=>{e.preventDefault();const msg=$('#campusMessage'),f=Object.fromEntries(new FormData(e.currentTarget));for(const k of ['latitude','longitude','geofence_radius_m'])if(f[k]==='')delete f[k];try{await api(`${API}/admin/campuses/`,{method:'POST',body:JSON.stringify(f)});e.currentTarget.reset();msg.textContent='Campus created.';msg.classList.remove('error');await loadCampuses();await refresh();}catch(x){msg.textContent=x.message;msg.classList.add('error');}});
-  $('#campusDirectoryForm').addEventListener('submit',async e=>{e.preventDefault();const msg=$('#campusDirectoryMessage'),name=$('#campusTemplate').value;try{const r=await api(`${API}/admin/campuses/add-directory-campus/`,{method:'POST',body:JSON.stringify({name})});msg.textContent=r.created?'Campus added. Configure its coordinates before using QR attendance.':'That campus is already in the directory.';msg.classList.remove('error');await loadCampuses();await refresh();}catch(x){msg.textContent=x.message;msg.classList.add('error');}});
-  $('#campusRegion').addEventListener('change',()=>{const region=$('#campusRegion').value,existing=new Set(state.campuses.map(c=>c.name)),items=CAMPUS_DIRECTORY.filter(([place,name])=>place===region&&!existing.has(name));const select=$('#campusTemplate');select.innerHTML='<option value="">Choose a campus</option>'+items.map(([,name,address])=>`<option value="${esc(name)}">${esc(name)} — ${esc(address)}</option>`).join('');select.disabled=!region;});
-  $('#closeMonthBtn').addEventListener('click',closeMonth);$('#exportBtn').addEventListener('click',()=>{if(!state.campus)return;const p=new URLSearchParams({campus_id:state.campus,date:$('#dateFilter').value||'',format:'csv'});downloadProtected(`${API}/mentor/attendance/?${p}`,`${state.date||'attendance'}-attendance.csv`);});
-  $('#profileButton').addEventListener('click',openProfile);$('#topProfileButton').addEventListener('click',openProfile);$('#closeProfile').addEventListener('click',()=>$('#profileModal').classList.add('hidden'));$('#profileModal').addEventListener('click',e=>{if(e.target===$('#profileModal'))$('#profileModal').classList.add('hidden');});
-  $('#profileForm').addEventListener('submit',async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.currentTarget));try{const r=await api(`${API}/auth/mentor/profile/`,{method:'PATCH',body:JSON.stringify(f)});paintProfile(r.display_name);$('#profileMessage').textContent='Profile saved.';$('#profileMessage').classList.remove('error');e.currentTarget.password.value='';}catch(x){$('#profileMessage').textContent=x.message;$('#profileMessage').classList.add('error');}});
-  $('#signOutButton').addEventListener('click',async()=>{try{await api(`${API}/auth/logout/`,{method:'POST',body:'{}'});}catch{}localStorage.removeItem('l2e_staff_token');state.token='';location.reload();});
-  document.body.addEventListener('click',e=>{const a=e.target.closest('[data-download]');if(a){e.preventDefault();downloadProtected(a.dataset.download,'attendance-report.csv');}});
+/*
+ * Engineer A — Learn2Earn Student Portal
+ * ---------------------------------------------------------------------------
+ * Frontend only. Every attendance decision (QR validity, session state, geofence,
+ * duplicate protection, On Time / Late) belongs to Engineer B's Django backend.
+ * This file displays what the API returns and never re-derives it.
+ *
+ * Auth: POST /auth/student/login/  ->  { token, student }
+ *       Authorization: Token <token>  (never Bearer)
+ */
+const CONFIG = {
+  // Same origin as the page by default, so Django can serve the portal at /student/
+  // and the API at /api/v1/ without any edit. Override with the meta tag in index.html
+  // or by setting window.LEARN2EARN_API_BASE before this script loads.
+  API_BASE_URL: (() => {
+    const meta = document.querySelector('meta[name="learn2earn-api-base"]');
+    const override = String(window.LEARN2EARN_API_BASE || meta?.content || "").trim();
+    if (override) return override.replace(/\/+$/, "");
+    const { protocol, origin } = window.location;
+    if (protocol === "http:" || protocol === "https:") return `${origin}/api/v1`;
+    return "https://fellowship.learn2earn.ng/api/v1";
+  })(),
+  // The student portal never registers accounts; a mentor or administrator enrolls students.
+  SESSION_STORAGE_KEY: "learn2earn.student.session",
+  SESSION_HOURS: 12,
+  WAT_TIMEZONE: "Africa/Lagos",
+  // A fresh fix for every scan: no cached coordinates, high accuracy requested.
+  GPS_OPTIONS: { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+  RECENT_ROWS: 5,
+};
+
+const SESSION_LABELS = {
+  morning: "Morning Session",
+  afternoon: "Afternoon Session",
+  evening: "Evening Session",
+};
+
+// Known backend status values are humanised for the badge; anything else is shown raw.
+// Canonical daily statuses are present / late / absent. `on_time` is only kept so
+// historical rows written before the daily policy still read naturally.
+const STATUS_LABELS = {
+  present: "Present",
+  late: "Late",
+  absent: "Absent",
+  on_time: "On Time",   // legacy value, historical rows only
+};
+
+const state = {
+  token: null,
+  student: null,
+  records: [],
+  historyMonth: "",
+  dashboardMonth: "",
+  scanner: null,
+  scannerRunning: false,
+  scannerStarting: false,
+  currentView: "dashboard",
+  scanLocked: false,
+  historyLoaded: false,
+  // Campus-local date and IANA zone, both supplied by the backend. Never computed
+  // from a fixed offset or the browser's clock zone.
+  campusDate: "",
+  campusTimezone: "",
+};
+
+const $ = (id) => document.getElementById(id);
+const apiUrl = (path) => `${CONFIG.API_BASE_URL}${path}`;
+
+/* ------------------------------------------------------------------ utils -- */
+function normalizeUsername(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, "");
 }
-function advancedEvents(){
-  setTheme(localStorage.getItem('l2e-theme')||'light');$('#themeToggle').addEventListener('click',()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
-  $('#studentImportForm').addEventListener('submit',async e=>{e.preventDefault();const msg=$('#importMessage'),file=e.currentTarget.querySelector('input[type=file]').files[0];if(!file)return;const form=new FormData();form.append('file',file);try{const r=await api(`${API}/admin/students/bulk_import/?campus_id=${encodeURIComponent(state.campus)}`,{method:'POST',body:form});msg.textContent=`Imported ${r.created}; ${r.errors.length} row errors.`;msg.classList.toggle('error',r.errors.length>0);await loadStudents();}catch(x){msg.textContent=x.message;msg.classList.add('error');}});
-  $('#studentBody').addEventListener('click',async e=>{const toggle=e.target.closest('[data-student-toggle]'),transfer=e.target.closest('[data-student-transfer]');try{if(toggle){await api(`${API}/admin/students/${toggle.dataset.id}/${toggle.dataset.studentToggle}/`,{method:'POST',body:'{}'});await loadStudents();showToast('Student status updated.');}if(transfer){const destinations=state.campuses.filter(c=>c.id!==state.campus);if(!destinations.length)return showToast('No other authorised campus is available.');const choice=prompt(`Enter destination campus UUID:\n${destinations.map(c=>`${c.name}: ${c.id}`).join('\n')}`);if(!choice)return;const reason=prompt('Reason for campus transfer:');if(!reason)return;await api(`${API}/admin/students/${transfer.dataset.id}/transfer/`,{method:'POST',body:JSON.stringify({campus_id:choice.trim(),reason})});await loadStudents();showToast('Student transferred; historical campus records are unchanged.');}}catch(x){showToast(x.message);}});
-  $('#fullBody').addEventListener('click',async e=>{const button=e.target.closest('[data-attendance-edit]');if(!button)return;const answer=prompt('New status: type present, late, or absent');if(!answer)return;const newStatus=answer.trim().toLowerCase();if(!['present','late','absent'].includes(newStatus))return showToast('Status must be present, late, or absent.');const reason=prompt('Reason for the attendance correction:');if(!reason)return;const payload={status:newStatus,reason};if(button.dataset.id)payload.attendance_id=button.dataset.id;else{payload.student_id=button.dataset.student;payload.session_type=button.dataset.session;}try{await api(`${API}/mentor/attendance/manual/`,{method:'POST',body:JSON.stringify(payload)});await refresh();showToast('Attendance adjustment saved in the audit history.');}catch(x){showToast(x.message);}});
+
+function sessionLabel(type) {
+  const key = String(type || "").trim().toLowerCase();
+  if (!key) return "—";
+  return SESSION_LABELS[key] || key.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
-async function boot(){try{state.authenticated=true;const p=state.profile||await api(`${API}/auth/mentor/profile/`);state.profile=p;paintProfile(p.display_name);await loadCampuses();if(!state.campuses.length){showToast('This account has no campus access yet. Use Django Admin to assign a campus.');return;}state.date=new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Lagos',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());$('#dateFilter').value=state.date;await loadTracks(state.campus);await refresh();await loadStudents();setInterval(()=>{$('#heroClock').textContent=`${watClock()} WAT`;$('#kioskTime').textContent=`${watClock()} WAT`;},1000);state.refreshTimer=setInterval(()=>refresh().catch(()=>{}),15000);}catch(e){showToast(e.message);}}
-events();advancedEvents();async function init(){try{state.authenticated=true;state.profile=await api(`${API}/auth/mentor/profile/`);await boot();}catch{state.authenticated=false;gateApp();}}init();
+
+function statusLabel(status) {
+  const key = String(status || "").trim().toLowerCase();
+  if (!key) return "—";
+  return STATUS_LABELS[key] || key.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Badge colour only. The text always comes from the backend; an unrecognised status
+// must not be dressed up as a good one, so it gets a neutral grey instead.
+const ON_TIME_ALIASES = ["present", "on_time", "on-time", "ontime"];
+
+function statusClass(status) {
+  const key = String(status || "").trim().toLowerCase();
+  if (key === "late") return "late";
+  if (key === "absent") return "absent";
+  if (ON_TIME_ALIASES.includes(key)) return "on-time";
+  return "neutral";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function monthKeyOf(record) {
+  const raw = String(record.attendance_date || record.scan_date || record.date || "");
+  const match = /^(\d{4})-(\d{2})/.exec(raw);
+  if (match) return `${match[1]}-${match[2]}`;
+  const stamp = record.scanned_at || record.scan_time_wat || "";
+  const parsed = Date.parse(stamp);
+  if (!Number.isNaN(parsed)) return campusDateFor(state.campusTimezone, new Date(parsed))?.slice(0, 7) || "";
+  return "";
+}
+
+function dateLabel(record) {
+  const raw = String(record.attendance_date || record.scan_date || "").slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match) return raw || "—";
+  const date = new Date(`${raw}T12:00:00Z`);
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: CONFIG.WAT_TIMEZONE, day: "2-digit", month: "short", year: "numeric",
+  }).format(date);
+}
+
+// Campus-local clock time. The backend sends scan_time_local in the campus's own
+// zone; the legacy scan_time_wat field carries the same value. Only when neither is
+// present do we fall back to the canonical UTC instant, rendered in the campus zone
+// when the backend told us which zone that is.
+function timeLabel(record) {
+  const local = String(record.scan_time_local || record.scan_time_wat || "").trim();
+  if (local) return local.length > 5 ? local.slice(0, 5) : local;
+  const stamp = record.scanned_at || record.timestamp || "";
+  const parsed = Date.parse(stamp);
+  if (Number.isNaN(parsed)) return "—";
+  const zone = record.campus_timezone || state.campusTimezone || CONFIG.WAT_TIMEZONE;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: zone, hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date(parsed));
+}
+
+// The canonical instant, exactly as the backend serialized it (UTC, unambiguous).
+function utcLabel(record) {
+  const stamp = String(record.scanned_at || "").trim();
+  if (!stamp) return "";
+  const parsed = Date.parse(stamp);
+  if (Number.isNaN(parsed)) return stamp;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC", day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).format(new Date(parsed)) + " UTC";
+}
+
+// Column heading follows the campus the records actually belong to.
+function campusTimeHeading() {
+  const zone = state.campusTimezone
+    || (state.records.find((r) => r && r.campus_timezone) || {}).campus_timezone
+    || "";
+  return zone ? `TIME (${String(zone).toUpperCase()})` : "TIME (CAMPUS LOCAL)";
+}
+
+function applyTimeHeadings() {
+  const label = campusTimeHeading();
+  ["historyTimeHeader", "recentTimeHeader"].forEach((id) => {
+    const el = $(id);
+    if (el) el.textContent = label;
+  });
+  const confirmLabel = $("confirmTimeLabel");
+  if (confirmLabel) confirmLabel.textContent = label;
+}
+
+function statusBadge(record) {
+  const raw = String(record.status || "").trim();
+  return `<span class="status-pill ${statusClass(raw)}" data-status="${escapeHtml(raw)}">${escapeHtml(statusLabel(raw))}</span>`;
+}
+
+function showToast(message) {
+  const toast = $("toast");
+  if (!toast) return;
+  toast.textContent = message;
+  toast.classList.add("show");
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => toast.classList.remove("show"), 4200);
+}
+
+/* ------------------------------------------------------------------- auth -- */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value) {
+  return UUID_RE.test(String(value || "").trim());
+}
+
+function normaliseStudent(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const campusObject = source.campus && typeof source.campus === "object" ? source.campus : null;
+  // The backend sends the campus UUID in `campus` and the readable label in
+  // `campus_name`; the student should never see a UUID.
+  const campusLabel = String(
+    source.campus_name
+    || source.campus_name_display
+    || campusObject?.name
+    || campusObject?.title
+    || campusObject?.code
+    || (typeof source.campus === "string" && source.campus && !isUuid(source.campus) ? source.campus : "")
+    || ""
+  );
+  const campusId = String(
+    (campusObject && (campusObject.id || campusObject.uuid))
+    || (isUuid(source.campus) ? source.campus : "")
+    || ""
+  );
+  const fullName = source.full_name
+    || source.name
+    || [source.first_name, source.last_name].filter(Boolean).join(" ")
+    || source.username
+    || "Student";
+  return {
+    id: source.id ?? source.student_id ?? source.pk ?? null,
+    full_name: String(fullName),
+    username: String(source.username || source.user_name || ""),
+    campus: campusLabel,
+    campus_id: campusId,
+  };
+}
+
+function extractToken(body) {
+  if (!body || typeof body !== "object") return null;
+  return body.token || body.access_token || body.key || body.auth_token || null;
+}
+
+function saveSession() {
+  try {
+    window.sessionStorage.setItem(CONFIG.SESSION_STORAGE_KEY, JSON.stringify({
+      token: state.token,
+      student: state.student,
+      savedAt: Date.now(),
+    }));
+  } catch { /* storage disabled: the session simply will not survive a refresh */ }
+}
+
+function clearSession() {
+  state.token = null;
+  state.student = null;
+  state.records = [];
+  state.historyLoaded = false;
+  try { window.sessionStorage.removeItem(CONFIG.SESSION_STORAGE_KEY); } catch { /* ignore */ }
+}
+
+function restoreSession() {
+  let saved;
+  try { saved = JSON.parse(window.sessionStorage.getItem(CONFIG.SESSION_STORAGE_KEY) || "null"); }
+  catch { return false; }
+  if (!saved || !saved.token || !saved.student) return false;
+  const ageMs = Date.now() - Number(saved.savedAt || 0);
+  if (!Number.isFinite(ageMs) || ageMs > CONFIG.SESSION_HOURS * 3600 * 1000) {
+    clearSession();
+    return false;
+  }
+  state.token = saved.token;
+  state.student = normaliseStudent(saved.student);
+  rememberCampusTimezone(saved.student);
+  return true;
+}
+
+class ApiError extends Error {
+  constructor(message, { status = 0, body = null, code = "" } = {}) {
+    super(message);
+    this.status = status;
+    this.body = body;
+    this.code = code;
+  }
+}
+
+function errorCode(body) {
+  if (!body || typeof body !== "object") return "";
+  return String(body.code || body.error_code || body.error || body.reason || "").trim().toLowerCase();
+}
+
+async function apiRequest(path, { method = "GET", body, auth = true } = {}) {
+  const headers = { Accept: "application/json" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (auth && state.token) headers.Authorization = `Token ${state.token}`;
+
+  let response;
+  try {
+    response = await fetch(apiUrl(path), {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError("Cannot reach the attendance server. Check your connection and try again.", { status: 0 });
+  }
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const detail = payload && (payload.detail || payload.message || payload.error_description);
+    const safeMessage = typeof detail === "string" && detail.trim()
+      ? detail.trim()
+      : defaultMessageForStatus(response.status);
+    const error = new ApiError(safeMessage, {
+      status: response.status,
+      body: payload,
+      code: errorCode(payload),
+    });
+    if (response.status === 401 && state.token) {
+      clearSession();
+      error.sessionExpired = true;
+    }
+    throw error;
+  }
+  return payload;
+}
+
+function defaultMessageForStatus(status) {
+  if (status === 400) return "We could not process that request. Check your details and try again.";
+  if (status === 401) return "Your sign-in is no longer valid. Please sign in again.";
+  if (status === 403) return "You are not allowed to do that. Contact your mentor if it continues.";
+  if (status === 404) return "That service is not available right now. Contact your mentor.";
+  if (status === 409) return "That record already exists.";
+  if (status === 429) return "Too many attempts. Wait a moment and try again.";
+  if (status >= 500) return "The attendance server had a problem. Please try again shortly.";
+  return "The request could not be completed.";
+}
+
+function clearAuthAlert() {
+  const alert = $("authAlert");
+  if (!alert) return;
+  alert.textContent = "";
+  alert.classList.add("hidden");
+}
+
+function showAuthAlert(message) {
+  const alert = $("authAlert");
+  if (!alert) return;
+  alert.textContent = message;
+  alert.classList.remove("hidden");
+}
+
+function handleSessionExpired() {
+  clearSession();
+  showAuth();
+  showAuthAlert("Your session ended. Please sign in again.");
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  clearAuthAlert();
+  const username = normalizeUsername($("loginUsername").value);
+  const password = $("loginPassword").value;
+  if (!username || !password) {
+    showAuthAlert("Enter your attendance username and password.");
+    return;
+  }
+  const button = $("loginFormEl").querySelector("button[type=submit]");
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.textContent = "Signing in…";
+  try {
+    const body = await apiRequest("/auth/student/login/", {
+      method: "POST",
+      auth: false,
+      body: { username, password },
+    });
+    const token = extractToken(body);
+    if (!token) throw new ApiError("The server did not return a login token. Contact your mentor.", { status: 0 });
+    state.token = token;
+    state.student = normaliseStudent(body.student || body.user || body.profile || body);
+    rememberCampusTimezone(body.student || body.user || body.profile || body);
+    saveSession();
+    $("loginPassword").value = "";
+    showApp();
+  } catch (error) {
+    if (error.status === 401 || error.status === 400) {
+      showAuthAlert(error.message || "Incorrect username or password.");
+    } else {
+      showAuthAlert(error.message);
+    }
+  } finally {
+    button.disabled = false;
+    button.innerHTML = original;
+  }
+}
+
+async function handleLogout() {
+  try {
+    if (state.token) await apiRequest("/auth/logout/", { method: "POST", body: {} });
+  } catch { /* the local session is cleared regardless of the server response */ }
+  clearSession();
+  showAuth();
+  showToast("You have signed out.");
+}
+
+/* ------------------------------------------------------------------- view -- */
+function showApp() {
+  $("authScreen").classList.add("hidden");
+  $("topName").textContent = state.student.full_name;
+  $("topUsername").textContent = state.student.username ? `@${state.student.username}` : "";
+  $("topCampus").textContent = state.student.campus || "";
+  $("topAvatar").textContent = String(state.student.full_name || "?").trim().charAt(0).toUpperCase();
+  $("welcomeName").textContent = String(state.student.full_name || "").split(" ")[0] || "Student";
+  $("profileName").textContent = state.student.full_name || "—";
+  $("profileUsername").textContent = state.student.username || "—";
+  $("profileCampus").textContent = state.student.campus || "Not assigned";
+  showView("dashboard");
+  loadAttendance();
+}
+
+function showAuth() {
+  stopScanner();
+  $("authScreen").classList.remove("hidden");
+}
+
+function showView(name) {
+  // Never leave the camera running behind another screen.
+  if (name !== "scanner") stopScanner();
+  if (!$(`${name}View`)) name = "dashboard";
+  state.currentView = name;
+  document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+  $(`${name}View`).classList.add("active");
+  document.querySelectorAll(".nav-item[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  $("pageTitle").textContent = ({ dashboard: "Dashboard", scanner: "Scan attendance", history: "Attendance history" })[name] || "Dashboard";
+  $("sidebar").classList.remove("open");
+  if (name !== "scanner") stopScanner();
+  if (name === "history" && state.student) loadAttendance();
+}
+
+/* -------------------------------------------------------------- attendance -- */
+function setTableState(tbody, message, kind = "empty") {
+  tbody.innerHTML = `<tr><td colspan="5" class="empty-cell ${kind}">${escapeHtml(message)}</td></tr>`;
+}
+
+function recordRow(record) {
+  return `<tr>
+    <td data-label="Session"><strong>${escapeHtml(sessionLabel(record.session_type || record.session_name))}</strong></td>
+    <td data-label="Action">${escapeHtml(actionLabel(record.attendance_action))}</td>
+    <td data-label="Date">${escapeHtml(dateLabel(record))}</td>
+    <td data-label="Time">${escapeHtml(timeLabel(record))}</td>
+    <td data-label="Status">${statusBadge(record)}</td>
+  </tr>`;
+}
+
+// Campus-local dates come from the backend, never from a fixed offset.
+// Sources, in order: the `attendance_date` of a scan response (201 or 409), or
+// `campus_timezone` when the student payload exposes it. When neither is available the
+// portal must not invent a date; callers fall back to the newest recorded day.
+function campusDateFor(timeZone, instant = new Date()) {
+  if (!timeZone) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(instant).reduce((acc, p) => (acc[p.type] = p.value, acc), {});
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+// The student payload may expose the campus zone as `campus_timezone`, or a nested
+// `campus.timezone` object. Absent today, so this stays dormant until Partner B adds it.
+function rememberCampusTimezone(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const nested = source.campus && typeof source.campus === "object" ? source.campus : {};
+  const zone = String(source.campus_timezone || source.timezone || nested.timezone || "").trim();
+  if (!zone) return;
+  state.campusTimezone = zone;
+}
+
+function rememberCampusDate(attendance) {
+  const day = dateKeyOf(attendance);
+  if (!day) return;
+  const changed = state.campusDate !== day;
+  state.campusDate = day;
+  if (changed && state.records && state.records.length) { renderDashboard(); renderHistory(); }
+}
+
+function dateKeyOf(record) {
+  return String((record && (record.attendance_date || record.scan_date || record.date)) || "").slice(0, 10);
+}
+
+function campusTodayKey() {
+  if (state.campusDate) return state.campusDate;
+  return campusDateFor(state.campusTimezone);
+}
+
+function campusMonthKey() {
+  const today = campusTodayKey();
+  if (today) return today.slice(0, 7);
+  const latest = sortRecords(state.records)[0];
+  const key = latest ? dateKeyOf(latest) : "";
+  return key ? key.slice(0, 7) : "";
+}
+
+// The existing record for today, read from history. Returns null when the history has
+// nothing for today (or cannot be loaded) so the caller can degrade gracefully.
+// Always read today's record from the server. A cached list can predate the scan that
+// just succeeded, and a duplicate must never be shown from stale data.
+async function fetchTodaysRecord(sessionType) {
+  const payload = await apiRequest("/student/attendance-history/");
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.records) ? payload.records
+    : Array.isArray(payload?.results) ? payload.results
+    : [];
+  state.records = list;
+  state.historyLoaded = true;
+  renderDashboard();
+  renderHistory();
+  const today = campusTodayKey();
+  const newest = sortRecords(list)[0];
+  const fallbackDay = today || (newest ? dateKeyOf(newest) : "");
+  const todays = sortRecords(list).filter(
+    (record) => dateKeyOf(record) === fallbackDay
+  );
+  if (!todays.length) return null;
+  const wanted = String(sessionType || "").trim().toLowerCase();
+  if (wanted) {
+    const match = todays.find((record) => String(record.session_type || "").trim().toLowerCase() === wanted);
+    if (match) return match;
+  }
+  return todays[0];
+}
+
+function sortRecords(records) {
+  return [...records].sort((a, b) => {
+    const aKey = `${a.attendance_date || ""}T${a.scan_time_wat || a.scanned_at || ""}`;
+    const bKey = `${b.attendance_date || ""}T${b.scan_time_wat || b.scanned_at || ""}`;
+    return bKey.localeCompare(aKey);
+  });
+}
+
+function renderDashboard() {
+  applyTimeHeadings();
+  const month = campusMonthKey();
+  const records = sortRecords(state.records.filter((r) => !month || monthKeyOf(r) === month));
+  // Only real attendance counts as attended: system or manual absences never do.
+  const attended = records.filter((r) => ["on-time", "late"].includes(statusClass(r.status)));
+  const onTime = attended.filter((r) => statusClass(r.status) === "on-time").length;
+  const late = attended.filter((r) => statusClass(r.status) === "late").length;
+
+  $("statAttended").textContent = String(attended.length);
+  $("statOnTime").textContent = String(onTime);
+  $("statLate").textContent = String(late);
+
+  if (attended.length) {
+    const latest = attended[0];
+    $("statLast").textContent = timeLabel(latest);
+    $("statLastMeta").textContent = `${sessionLabel(latest.session_type || latest.session_name)} · ${dateLabel(latest)}`;
+  } else {
+    $("statLast").textContent = "—";
+    $("statLastMeta").textContent = "No scan recorded yet";
+  }
+
+  renderCheckpoints();
+
+  const tbody = $("recentRows");
+  if (!records.length) {
+    setTableState(tbody, "No attendance recorded this month yet.");
+    return;
+  }
+  tbody.innerHTML = records.slice(0, CONFIG.RECENT_ROWS).map(recordRow).join("");
+}
+
+function renderHistory() {
+  applyTimeHeadings();
+  const month = state.historyMonth || campusMonthKey();
+  const records = sortRecords(state.records.filter((r) => monthKeyOf(r) === month));
+  const tbody = $("historyRows");
+  const count = $("historyCount");
+
+  if (!state.historyLoaded) {
+    setTableState(tbody, "Loading your attendance…");
+    count.textContent = "—";
+    return;
+  }
+  if (!records.length) {
+    setTableState(tbody, `No attendance recorded for ${month}.`);
+    count.textContent = "0 records";
+    return;
+  }
+  tbody.innerHTML = records.map(recordRow).join("");
+  count.textContent = `${records.length} record${records.length === 1 ? "" : "s"}`;
+}
+
+async function loadAttendance({ quiet = false } = {}) {
+  if (!state.token) return;
+  if (!state.historyLoaded && !quiet) {
+    setTableState($("historyRows"), "Loading your attendance…");
+    setTableState($("recentRows"), "Loading your attendance…");
+  }
+  try {
+    const payload = await apiRequest("/student/attendance-history/");
+    // The contract returns a bare list; tolerate a wrapped list defensively.
+    const list = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.records) ? payload.records
+      : Array.isArray(payload?.results) ? payload.results
+      : [];
+    state.records = list;
+    state.historyLoaded = true;
+    renderDashboard();
+    renderHistory();
+  } catch (error) {
+    if (error.sessionExpired) return handleSessionExpired();
+    state.historyLoaded = true;
+    setTableState($("historyRows"), error.message, "error");
+    setTableState($("recentRows"), error.message, "error");
+    $("historyCount").textContent = "Could not load records";
+    showToast(error.message);
+  }
+}
+
+/* ----------------------------------------------------------------- scanner -- */
+function setScanState(visible, title, text) {
+  const box = $("scanState");
+  if (!box) return;
+  if (!visible) { box.classList.add("hidden"); return; }
+  $("scanStateTitle").textContent = title;
+  $("scanStateText").textContent = text || "";
+  box.classList.remove("hidden");
+}
+
+function showScanNotice(message, { retry = false } = {}) {
+  const notice = $("scanNotice");
+  notice.textContent = message;
+  notice.classList.remove("hidden");
+  $("scanRetry").classList.toggle("hidden", !retry);
+}
+
+function clearScanNotice() {
+  $("scanNotice").classList.add("hidden");
+  $("scanRetry").classList.add("hidden");
+}
+
+async function startScanner() {
+  clearScanNotice();
+  const notice = $("scanNotice");
+  if (!window.Html5Qrcode) {
+    showScanNotice("The QR scanner library did not load. Check your internet connection and refresh the page.", { retry: true });
+    return;
+  }
+  if (state.scanLocked) {
+    showScanNotice("Your previous scan is still being verified. Please wait.");
+    return;
+  }
+  if (state.scannerRunning || state.scannerStarting) return;
+  state.scannerStarting = true;
+  try {
+    if (!state.scanner) state.scanner = new window.Html5Qrcode("reader");
+    const cameras = await window.Html5Qrcode.getCameras();
+    if (!cameras || !cameras.length) throw new Error("No camera was found on this device.");
+    const camera = cameras.find((c) => /back|rear|environment/i.test(c.label || "")) || cameras[cameras.length - 1];
+    await state.scanner.start(
+      camera.id,
+      { fps: 10, qrbox: { width: 230, height: 230 }, aspectRatio: 1.0 },
+      onQrDecoded,
+      () => {},
+    );
+    state.scannerRunning = true;
+    $("startScanBtn").disabled = true;
+    $("stopScanBtn").disabled = false;
+    notice.classList.add("hidden");
+  } catch (error) {
+    showScanNotice(
+      error?.message || "Could not start the camera. Allow camera access and use HTTPS, then try again.",
+      { retry: true },
+    );
+  } finally {
+    state.scannerStarting = false;
+  }
+}
+
+async function stopScanner() {
+  if (!state.scanner || !state.scannerRunning) return;
+  try { await state.scanner.stop(); } catch { /* already stopped */ }
+  try { state.scanner.clear(); } catch { /* older builds */ }
+  state.scannerRunning = false;
+  const start = $("startScanBtn");
+  const stop = $("stopScanBtn");
+  if (start) start.disabled = false;
+  if (stop) stop.disabled = true;
+}
+
+function geolocationError(error) {
+  const code = error && typeof error === "object" ? error.code : 0;
+  if (code === 1) {
+    return new ApiError(
+      "Location permission is required to check in. Allow location access for this site, then scan again.",
+      { code: "gps_permission_denied" },
+    );
+  }
+  if (code === 2) {
+    return new ApiError(
+      "Your location is unavailable right now. Move to an open area with a clearer signal and try again.",
+      { code: "gps_unavailable" },
+    );
+  }
+  if (code === 3) {
+    return new ApiError("Getting your location took too long. Try again.", { code: "gps_timeout" });
+  }
+  return new ApiError("We could not read your location. Check that location services are on and try again.", { code: "gps_error" });
+}
+
+function getFreshPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new ApiError(
+        "This browser cannot share your location, so attendance cannot be verified. Try a phone or a browser with location support.",
+        { code: "gps_unsupported" },
+      ));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => resolve({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      }),
+      (error) => reject(geolocationError(error)),
+      CONFIG.GPS_OPTIONS,
+    );
+  });
+}
+
+// Attendance is per checkpoint: a repeat scan in the same checkpoint is a duplicate,
+// while a later checkpoint on the same campus-local day is a legitimate new record.
+const DUPLICATE_CHECKPOINT_TEXT = "You have already completed this checkpoint today.";
+
+function describeScanError(error) {
+  const code = String(error.code || "").toLowerCase();
+  const message = String(error.message || "").trim();
+  const body = error.body && typeof error.body === "object" ? error.body : {};
+
+  // A campus with no coordinates configured is a staff problem, not a student problem.
+  if (code.includes("location_unconfigured") || code.includes("campus_location")) {
+    return {
+      text: "Attendance is temporarily unavailable because campus location settings have not been configured. Please contact your mentor or campus administrator.",
+    };
+  }
+  if (code.includes("student_inactive")) {
+    return { text: "Your student account is inactive. Please contact your mentor or campus administrator." };
+  }
+  if (error.status === 409 || code.includes("duplicate")) {
+    return { text: DUPLICATE_CHECKPOINT_TEXT, duplicate: true };
+  }
+  if (code.includes("expired") || /expired/i.test(message)) {
+    return { text: "This QR code has expired. Ask your mentor to show the current code and scan again.", retry: true };
+  }
+  if (code.includes("invalid") && code.includes("qr") || /not a valid qr|invalid qr|malformed/i.test(message)) {
+    return { text: "That QR code was not recognised. Make sure you are scanning the attendance code, not another QR code.", retry: true };
+  }
+  if (code.includes("campus") || code.includes("geofence") || code.includes("distance") || code.includes("location")) {
+    return { text: message || "You appear to be outside your campus. Move closer to the campus and scan again.", retry: true };
+  }
+  if (code.includes("inactive") || code.includes("no_session") || code.includes("closed")) {
+    return { text: message || "There is no active attendance session right now. Ask your mentor when the next session opens.", retry: true };
+  }
+  if (code.includes("accuracy")) {
+    return { text: message || "Your location was not accurate enough to verify attendance. Move to an open area and try again.", retry: true };
+  }
+  if (error.status === 401) {
+    return { text: "Your session ended. Please sign in again." };
+  }
+  if (error.status === 403) {
+    return { text: message || "The server rejected this scan. Contact your mentor if it keeps happening.", retry: true };
+  }
+  if (error.status === 429) {
+    return { text: "Too many scans in a short time. Wait a moment and try again.", retry: true };
+  }
+  if (error.status >= 500) {
+    return { text: "The attendance server had a problem recording your scan. Please try again shortly.", retry: true };
+  }
+  if (body.detail && typeof body.detail === "string") {
+    return { text: body.detail, retry: true };
+  }
+  return { text: message || "We could not record your attendance. Please try again.", retry: true };
+}
+
+async function onQrDecoded(decodedText) {
+  if (state.scanLocked) return;                 // one submission at a time
+  state.scanLocked = true;
+  clearScanNotice();
+  $("startScanBtn").disabled = true;
+  $("stopScanBtn").disabled = true;
+
+  // The decoded text is sent exactly as the camera produced it; only the server judges it.
+  const qrPayload = decodedText;
+
+  try {
+    setScanState(true, "Verifying scan…", "Getting your location…");
+    await stopScanner();
+    const position = await getFreshPosition();
+
+    setScanState(true, "Verifying scan…", "Checking your QR code and location with the attendance server.");
+    const result = await apiRequest("/attendance/scan/", {
+      method: "POST",
+      body: {
+        qr_payload: qrPayload,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+      },
+    });
+
+    const attendance = result && (result.attendance || result.record) ? (result.attendance || result.record) : result;
+    rememberCampusDate(attendance);
+    setScanState(false);
+    showConfirmation(attendance || {}, { duplicate: false });
+    await loadAttendance();
+  } catch (error) {
+    setScanState(false);
+    if (error.sessionExpired) return handleSessionExpired();
+
+    const described = describeScanError(error);
+    if (described.duplicate) {
+      // Prefer the record the backend returned with the 409; otherwise look it up in the
+      // student's own history. If neither exists we say so and never invent a record.
+      let existing = (error.body && (error.body.attendance || error.body.record)) || null;
+      rememberCampusDate(existing);
+      let refreshFailed = false;
+      if (!existing) {
+        try {
+          existing = await fetchTodaysRecord(
+            (error.body && error.body.attendance && error.body.attendance.session_type) || ""
+          );
+        } catch (lookupError) {
+          if (lookupError.sessionExpired) return handleSessionExpired();
+          refreshFailed = true;
+        }
+      }
+      if (existing) {
+        showConfirmation(existing, { duplicate: true });
+        showScanNotice(DUPLICATE_CHECKPOINT_TEXT);
+      } else if (refreshFailed) {
+        showScanNotice(
+          "You have already completed this checkpoint, but we could not refresh the record just now. Reopen the History tab to load it.",
+          { retry: false },
+        );
+      } else {
+        showScanNotice(
+          "You have already completed this checkpoint. It is not showing in your history yet; reopen the History tab to refresh.",
+          { retry: false },
+        );
+      }
+      return;
+    }
+    showScanNotice(described.text, { retry: described.retry !== false });
+    showToast(described.text);
+  } finally {
+    state.scanLocked = false;
+    $("startScanBtn").disabled = false;
+    $("stopScanBtn").disabled = true;
+  }
+}
+
+/* ------------------------------------------------------------ confirmation -- */
+const CHECKPOINTS = ["morning", "afternoon", "evening"];
+const ACTION_LABELS = { check_in: "Check-in", check_out: "Check-out" };
+
+function actionLabel(action) {
+  const key = String(action || "").trim().toLowerCase();
+  if (!key) return "—";
+  return ACTION_LABELS[key] || key.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function todaysRecords() {
+  const key = campusTodayKey();
+  if (key) return sortRecords(state.records.filter((record) => dateKeyOf(record) === key));
+  const latest = sortRecords(state.records)[0];
+  const newest = latest ? dateKeyOf(latest) : "";
+  if (!newest) return [];
+  return sortRecords(state.records.filter((record) => dateKeyOf(record) === newest));
+}
+
+// True when the panel is showing the newest recorded day because the backend has not
+// yet told the portal the campus-local date.
+function showingNewestRecordedDay() {
+  return !campusTodayKey() && sortRecords(state.records).length > 0;
+}
+
+// One row per checkpoint, built only from records the backend returned.
+function renderCheckpoints() {
+  const body = $("checkpointRows");
+  if (!body) return;
+  const hint = $("checkpointHint");
+  if (hint) {
+    const day = campusTodayKey();
+    hint.textContent = day
+      ? `Campus-local date ${day}. Morning, afternoon and evening are recorded separately.`
+      : showingNewestRecordedDay()
+        ? "Showing your most recent recorded day. Your campus date is confirmed when you scan."
+        : "Morning, afternoon and evening are recorded separately.";
+  }
+  const today = todaysRecords();
+  const bySession = {};
+  today.forEach((record) => {
+    const key = String(record.session_type || "").trim().toLowerCase();
+    if (key && !bySession[key]) bySession[key] = record;
+  });
+  const known = CHECKPOINTS.concat(
+    Object.keys(bySession).filter((key) => !CHECKPOINTS.includes(key))
+  );
+  body.innerHTML = known.map((key) => {
+    const record = bySession[key];
+    const state = record
+      ? `<span class="status-pill ${statusClass(record.status)}" data-status="${escapeHtml(record.status)}">${escapeHtml(statusLabel(record.status).toUpperCase())}</span>`
+      : '<span class="status-pill neutral">NOT RECORDED YET</span>';
+    const meta = record
+      ? `${escapeHtml(actionLabel(record.attendance_action))} · ${escapeHtml(timeLabel(record))}`
+      : "Scan this checkpoint's QR when your mentor opens it";
+    return `<tr>
+      <td data-label="Checkpoint"><strong>${escapeHtml(sessionLabel(key))}</strong></td>
+      <td data-label="State">${state}</td>
+      <td data-label="Detail">${meta}</td>
+    </tr>`;
+  }).join("");
+}
+
+function showConfirmation(attendance, { duplicate = false } = {}) {
+  const rawStatus = String(attendance.status || "").trim();
+  $("confirmName").textContent = attendance.full_name || state.student?.full_name || "—";
+  $("confirmUsername").textContent = attendance.username || state.student?.username || "—";
+  $("confirmSession").textContent = sessionLabel(attendance.session_type || attendance.session_name);
+  $("confirmDate").textContent = attendance.attendance_date ? dateLabel(attendance) : "—";
+  $("confirmTime").textContent = timeLabel(attendance);
+  const utcEl = $("confirmUtc");
+  if (utcEl) {
+    const canonical = utcLabel(attendance);
+    utcEl.textContent = canonical || "—";
+    utcEl.title = canonical ? "Canonical backend timestamp (scanned_at)" : "";
+  }
+
+  // attendance_action is returned by the backend; we display it verbatim and never
+  // branch on its value (Engineer B owns the enum).
+  const rawAction = String(attendance.attendance_action || "").trim();
+  $("confirmActionRow").classList.toggle("hidden", !rawAction);
+  $("confirmAction").textContent = rawAction || "—";
+  $("confirmAction").dataset.action = rawAction;
+
+  const statusEl = $("confirmStatus");
+  statusEl.dataset.status = rawStatus;
+  statusEl.textContent = rawStatus ? statusLabel(rawStatus).toUpperCase() : "RECORDED";
+  statusEl.className = `confirmation-status ${statusClass(rawStatus)}`;
+
+  const card = $("confirmationModal").querySelector(".confirmation-card");
+  card.classList.toggle("duplicate", duplicate);
+  $("confirmationMark").textContent = duplicate ? "!" : "✓";
+  $("confirmationEyebrow").textContent = duplicate ? "ALREADY RECORDED" : "ATTENDANCE VERIFIED";
+  const checkpoint = sessionLabel(attendance.session_type || attendance.session_name);
+  const verb = String(attendance.attendance_action || "").toLowerCase() === "check_out" ? "check-out" : "check-in";
+  $("confirmationTitle").textContent = duplicate
+    ? `${checkpoint} already recorded`
+    : `${checkpoint} ${verb} confirmed`;
+  $("confirmationSubtitle").textContent = duplicate
+    ? `You already completed the ${checkpoint.toLowerCase()} checkpoint today. This is the record on file.`
+    : `Your ${checkpoint.toLowerCase()} attendance was recorded by the server.`;
+
+  $("confirmationModal").classList.remove("hidden");
+  $("confirmationModal").querySelector(".confirmation-card").focus();
+}
+
+function hideConfirmation() {
+  $("confirmationModal").classList.add("hidden");
+}
+
+/* ------------------------------------------------------------------- wiring */
+function setConnectionNote() {
+  const note = $("connectionNote");
+  if (!note) return;
+  note.textContent = `Attendance service: ${CONFIG.API_BASE_URL}`;
+}
+
+function wireEvents() {
+  $("loginFormEl").addEventListener("submit", handleLogin);
+  $("logoutBtn").addEventListener("click", handleLogout);
+  window.addEventListener("pagehide", () => { stopScanner(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") stopScanner();
+  });
+  $("dashboardScanBtn").addEventListener("click", () => showView("scanner"));
+  $("startScanBtn").addEventListener("click", startScanner);
+  $("stopScanBtn").addEventListener("click", stopScanner);
+  $("retryScanBtn").addEventListener("click", () => { clearScanNotice(); startScanner(); });
+  $("retryCameraBtn").addEventListener("click", async () => { clearScanNotice(); await stopScanner(); startScanner(); });
+  $("menuBtn").addEventListener("click", () => $("sidebar").classList.toggle("open"));
+  $("closeConfirmation").addEventListener("click", hideConfirmation);
+  $("confirmationModal").addEventListener("click", (event) => {
+    if (event.target === $("confirmationModal")) hideConfirmation();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("confirmationModal").classList.contains("hidden")) hideConfirmation();
+  });
+  document.querySelectorAll(".nav-item[data-view]").forEach((button) => {
+    button.addEventListener("click", () => showView(button.dataset.view));
+  });
+  document.querySelectorAll("[data-go]").forEach((button) => {
+    button.addEventListener("click", () => showView(button.dataset.go));
+  });
+  $("monthFilter").addEventListener("change", () => {
+    state.historyMonth = $("monthFilter").value || campusMonthKey();
+    renderHistory();
+  });
+}
+
+function init() {
+  $("year").textContent = String(new Date().getFullYear());
+  state.dashboardMonth = campusMonthKey();
+  state.historyMonth = state.dashboardMonth;
+  $("monthFilter").value = state.dashboardMonth;
+  setConnectionNote();
+  wireEvents();
+  if (restoreSession()) showApp();
+  else showAuth();
+}
+
+document.addEventListener("DOMContentLoaded", init);

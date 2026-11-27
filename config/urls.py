@@ -17,6 +17,7 @@ def health(_request):
 
 urlpatterns = [
     path("student/", TemplateView.as_view(template_name="student/index.html"), name="student-portal"),
+    path("mentor/", TemplateView.as_view(template_name="mentor/index.html"), name="mentor-portal"),
     path("", portal, name="portal"),
     path("assets/<str:filename>", asset, name="asset-in-assets"),
     path("<str:filename>", asset, name="asset"),

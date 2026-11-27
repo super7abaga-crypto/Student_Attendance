@@ -1,114 +1,67 @@
-# Shared files between PR #3 and PR #4
+# Shared files between the student portal and the Django integration
 
-Both pull requests touch the same eight files. Each one is clean against `main`
-on its own, so the conflict only appears when the second PR lands. This page
-records who owns what and which PR merges first.
+The student portal was merged into `main` first (PR #3, head `5cb4257`, merge `0fcb4e8`,
+recovery workflow via PR #8, merge `8d332a8`). PR #4 adds the Django backend on top of it.
+This page records what those two efforts share, who owns each file, and how the overlap was
+resolved.
 
-Computed from the two pull requests on 26 November 2026 by intersecting their
-changed-file lists against `main` (`00d25e8`): `git diff --name-only 00d25e8 <head>`.
-PR #3 (`b108f5e`) changes 37 files, PR #4 (`cf8fb6b`) changes 82, and these eight
-appear in both. Re-run those two commands rather than trusting these numbers; they
-move whenever either branch gains a file.
+## Ownership
 
-| File | PR #3 (Partner A) | PR #4 (Partner B) | Owner after merge |
-|---|---|---|---|
-| `.gitignore` | modified | modified | Shared; preserve compatible rules |
-| `API_CONTRACT.md` | modified +164 / −135 | modified +3 / −1 | Partner A |
-| `README.md` | modified +300 / −609 | modified +31 / −701 | Split by section |
-| `app.js` | modified +842 / −294 | modified +60 / −423 | Partner B |
-| `dev/kiosk.html` | modified +95 / −40 | **removed** −76 | Deletion stands |
-| `index.html` | modified +56 / −16 | modified +48 / −99 | Partner B |
-| `server.py` | modified +406 / −436 | modified −1 | Retired |
-| `styles.css` | modified +42 / −0 | modified +46 / −421 | Partner B |
+| Area | Owner | Files |
+|---|---|---|
+| Student portal source | Partner A | `app.js`, `index.html`, `styles.css`, `server.py`, `dev/kiosk.html`, `API_CONTRACT.md`, `tests/api-test.py`, `tests/ui-test.js`, `tests/e2e-django.js`, `tests/responsive-test.js` |
+| Portal documentation | Partner A | `README.md` portal sections, `API_CONTRACT.md` |
+| Django backend | Partner B | `apps/`, `config/`, `manage.py`, `requirements.txt`, `Procfile`, `.env.example` |
+| Django portal copies | Partner B (generated) | `templates/student/index.html`, `static/student/*` — synced from Partner A's source, never hand-edited |
+| Mentor console | Partner B | `templates/mentor/index.html`, `static/mentor/*` |
 
-## Current architecture and ownership
+A documentation change does not move ownership. Partner A's portal files stay Partner A's
+even when they live inside a Django-served tree.
 
-The root files (`app.js`, `index.html`, `styles.css`) are the Django mentor console and
-remain Partner B-owned. Partner A's student portal is served at `/student/` from
-`templates/student/index.html` and `static/student/`; those copied files are synchronized
-from Partner A's source by `tools/sync_student_portal.py`. The student portal is not restored
-over the mentor console at the root.
+## The eight files both efforts touched
 
-## Why the conflict is structural, not editorial
+| File | Resolution at this head |
+|---|---|
+| `app.js` | Byte-identical to `main` (Partner A's portal) |
+| `index.html` | Byte-identical to `main` (contains `#enrollNote`) |
+| `styles.css` | Byte-identical to `main` |
+| `server.py` | Byte-identical to `main` (student API mock) |
+| `dev/kiosk.html` | Restored from `main`; no deletion |
+| `API_CONTRACT.md` | Byte-identical to `main` |
+| `README.md` | Byte-identical to `main`; backend documentation lives in `docs/` |
+| `.gitignore` | Union of `main`'s rules and the Django paths `/data/`, `/staticfiles/`, `openapi.yaml` |
 
-PR #3 was branched from `main` when the student portal *was* the root
-application: `app.js`, `index.html` and `styles.css` at the repository root were
-the portal. PR #4 turns the root into the Django mentor console and moves the
-student portal to `templates/student/index.html` and `static/student/`.
+Seven files were restored from `main` rather than re-resolved line by line: they are Partner
+A's source, and Partner B's earlier versions of them were older snapshots. Only `.gitignore`
+needed a genuine merge, because both sides add rules that are still wanted.
 
-So both PRs rewrote the same three root files, for different products. It is not
-a merge accident that can be resolved line by line; the same path now means two
-different applications.
+## Where each application lives now
 
-## Per-file resolution
+| URL | Serves | Source |
+|---|---|---|
+| `/` | Student portal | root `index.html`, `app.js`, `styles.css` via `apps.core.frontend.portal` |
+| `/student/` | Student portal | `templates/student/index.html` + `static/student/*`, synced by `tools/sync_student_portal.py` |
+| `/mentor/` | Mentor console | `templates/mentor/index.html` + `static/mentor/*` |
+| `/api/v1/` | Attendance API | `apps/core/` |
 
-- **`app.js`, `index.html`, `styles.css`**: Partner B's versions stay at the root
-  because they are the mentor console. Partner A's portal work is not lost; it
-  belongs under `static/student/` and `templates/student/`. Partner B already
-  vendored a snapshot of it there, and that snapshot is now behind Partner A's
-  branch (see `INTEGRATION_REVIEW.md`).
-- **`README.md`**: split. Partner B owns the backend, deployment, migration and
-  verification sections. Partner A owns the student portal section and its
-  screenshots. Do not let either side overwrite the other wholesale.
-- **`API_CONTRACT.md`**: Partner A owns the document. Partner B's change there is
-  three lines of contract note and is re-applied on top after Partner A's
-  rewrite lands.
-- **`dev/kiosk.html`**: Partner B deleted it because the mentor portal has a
-  kiosk page at `/kiosk`. Partner A fixed bugs in the file. Accept the deletion
-  and treat Partner A's fixes as superseded.
-- **`server.py`**: the standard-library demo backend that predates Django. Partner
-  B's branch keeps the file with one line removed, and Partner A rewrote it.
-  Neither change matters: the file should be deleted in a separate, clearly
-  labelled cleanup commit rather than resolved inside a merge.
+The mentor console previously occupied the repository root, which is what made the two
+efforts collide: the same three paths meant two different applications. It now has its own
+template, its own static directory and its own route, so the root can stay Partner A's.
 
-## Merge order
-
-**PR #4 merges first. PR #3 then rebases onto the merged `main` and re-points the
-student portal at `static/student/`.**
-
-Reasons:
-
-1. PR #4 is the larger architectural change and the backend is Partner A's
-   dependency. Landing the backend first means Partner A rebases onto a stable
-   target once.
-2. Partner A's seven commits are portal changes that survive as files. Rebasing
-   them onto the new layout is a re-pointing exercise, not a rewrite.
-3. The reverse order would force Partner B to resolve seven conflicts inside a
-   much larger merge, with a real risk of silently dropping Partner A's
-   corrections to the portal.
-4. Both PRs currently report `mergeable: clean` against `main`. That is only true
-   until the first one lands, so the order must be decided before either merge.
-
-## Sequence that satisfies the release gate
-
-1. Partner B's P1 corrections and CI land on `feat/engineer-b-attendance`.
-2. PR #4 is reviewed and approved by the CEO, then merged.
-3. Partner A rebases PR #3 onto the new `main`, deletes the root portal files
-   from their branch, and points the portal at `static/student/`.
-4. Joint integration review re-runs the suite and the end-to-end script against
-   the rebased branch.
-5. CEO approval for PR #3.
-
-No merge happens before the approval in step 2 and step 5.
-
-## Keeping the served portal in sync
-
-`static/student/app.js`, `static/student/styles.css` and `templates/student/index.html`
-are a served copy of Partner A's portal. A manual copy drifts, which is exactly how the
-21 November snapshot survived into this branch. The copy is now recorded in
-`static/student/PORTAL_SOURCE.json` (source commit plus a sha256 per file) and only
-`tools/sync_student_portal.py` should change it:
+## Recomputing the counts
 
 ```bash
-# verify the committed copy against the recorded source
-python3 tools/sync_student_portal.py --check
-
-# re-copy from a Partner A checkout (app.js and styles.css verbatim; index.html
-# through the small static-path adapter) and rewrite the manifest
-python3 tools/sync_student_portal.py --source ../student-portal --write
+git diff --name-only origin/main <pr-head> | wc -l
 ```
 
-`--check` runs in CI before the test suite, and
-`apps/core/tests/test_student_portal_copy.py` additionally asserts that `/student/`
-serves the three-checkpoint portal and that the served `app.js` is the recorded copy.
-Drift therefore fails the build instead of shipping silently.
+At this head that is **79 files** against `main` (`8d332a8`): 76 additions (the Django backend
+and the Django portal copies) and 3 modifications (`.github/workflows/portal-tests.yml`,
+`.gitignore`, `requirements.txt`). Re-run the command rather than trusting the number; it
+moves whenever the branch gains a file.
+
+## Portal synchronisation
+
+`tools/sync_student_portal.py --check` compares `static/student/app.js` and
+`static/student/styles.css` against `static/student/PORTAL_SOURCE.json` and re-derives
+`templates/student/index.html` from Partner A's `index.html`. It fails if a copy drifts, and
+CI runs it, so a stale copy cannot be merged silently.
