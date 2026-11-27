@@ -21,6 +21,14 @@ move whenever either branch gains a file.
 | `server.py` | modified +406 / −436 | modified −1 | Retired |
 | `styles.css` | modified +42 / −0 | modified +46 / −421 | Partner B |
 
+## Current architecture and ownership
+
+The root files (`app.js`, `index.html`, `styles.css`) are the Django mentor console and
+remain Partner B-owned. Partner A's student portal is served at `/student/` from
+`templates/student/index.html` and `static/student/`; those copied files are synchronized
+from Partner A's source by `tools/sync_student_portal.py`. The student portal is not restored
+over the mentor console at the root.
+
 ## Why the conflict is structural, not editorial
 
 PR #3 was branched from `main` when the student portal *was* the root
