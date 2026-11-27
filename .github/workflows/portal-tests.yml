@@ -126,7 +126,22 @@ jobs:
           fi
 
       - name: Fetch Partner B's Django backend at the pinned commit
+        env:
+          BACKEND_PIN_FILE: .github/backend-pin.txt
         run: |
+          # The expected commit is recorded independently of the pin, so a pin that
+          # drifts to a different but valid commit fails here instead of being tested.
+          expected="$(grep -v '^[[:space:]]*#' "$BACKEND_PIN_FILE" | tr -d '[:space:]')"
+          if [ -z "$expected" ]; then
+            echo "::error::no expected backend commit recorded in $BACKEND_PIN_FILE"
+            exit 1
+          fi
+          echo "recorded expected backend: $expected"
+          echo "workflow pin:              $BACKEND_SHA"
+          if [ "$BACKEND_SHA" != "$expected" ]; then
+            echo "::error::pin $BACKEND_SHA does not match recorded expected $expected"
+            exit 1
+          fi
           git clone --branch "$BACKEND_REF" \
             "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
             "$RUNNER_TEMP/backend"
@@ -134,8 +149,8 @@ jobs:
           git checkout --detach "$BACKEND_SHA"
           resolved="$(git rev-parse HEAD)"
           echo "backend commit under test: $resolved"
-          if [ "$resolved" != "$BACKEND_SHA" ]; then
-            echo "::error::expected backend $BACKEND_SHA but resolved $resolved"
+          if [ "$resolved" != "$expected" ]; then
+            echo "::error::resolved $resolved does not match recorded expected $expected"
             exit 1
           fi
 

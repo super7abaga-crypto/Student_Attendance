@@ -1,0 +1,7 @@
+# Independently recorded expected backend commit for the portal E2E suite.
+#
+# The workflow pin (BACKEND_SHA in .github/workflows/portal-tests.yml) must equal
+# this value, and the checked-out commit must resolve to it. Changing what the E2E
+# suite tests therefore requires a second, separately reviewed edit here, so a pin
+# cannot drift to a different real commit unnoticed.
+8f146df38dcd5f236aaae7d0fe6695ade98514af
